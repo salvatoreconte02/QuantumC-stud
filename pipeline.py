@@ -1,5 +1,6 @@
 """CLI driving the QuantumC compilation pipeline."""
 from __future__ import annotations
+from pprint import pprint
 
 import argparse
 import json
@@ -54,18 +55,36 @@ def save_module(module: ModuleOp, path: str) -> None:
 def compile_c_file(
     c_file: str, num_bits: int = 16, verbose: bool = False, pretty: bool = False, run: bool = False
 ) -> str:
+    from my_extensions.vecmat_lowering import from_c_ast_to_vecmat
+
     base = os.path.splitext(os.path.basename(c_file))[0]
 
+    # Step 1: Clang → JSON AST
     json_path = generate_json_ast(c_file)
     with open(json_path) as f:
         ast_json = json.load(f)
+
+    # Step 2: JSON AST → TranslationUnit (dataclass)
     tu = parse_ast(ast_json)
 
+    # (Opzionale) pretty-print del C ricostruito
     if pretty:
         print("=== Pretty Printed C Code ===")
         print(pretty_print_translation_unit(tu))
         print("================================")
 
+    # Test del nuovo pass: TranslationUnit → VecMatModule
+    print("=== TranslationUnit (dataclass) ===")
+    pprint(tu)
+
+    vecmat_module = from_c_ast_to_vecmat(tu, num_bits)
+    print("=== VecMatModule (dialetto vettoriale/matriciale) ===")
+    pprint(vecmat_module)
+
+    # Per ora ci si ferma qui: non si prosegue verso MLIR e circuito.
+    sys.exit(0)
+
+    # --- CODICE ORIGINALE (non raggiunto finché c'è il sys.exit(0)) ---
     mlir_module = generate_mlir(tu)
     classical_path = os.path.join(MLIR_DIR, f"{base}_classical.mlir")
     save_module(mlir_module, classical_path)
@@ -77,7 +96,6 @@ def compile_c_file(
     circuit = generate_circuit(quantum_module, num_bits=num_bits, verbose=verbose)
     qasm_path = os.path.join(QASM_DIR, f"{base}.qasm")
 
-    # ✅ Use standard QASM if simulation is requested, otherwise export Clifford+T
     if run:
         export_qasm(circuit, qasm_path)
     else:

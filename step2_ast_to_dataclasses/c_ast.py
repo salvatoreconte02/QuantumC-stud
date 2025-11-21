@@ -66,6 +66,14 @@ class UnaryOperator(Expression):
     opcode: str
     operand: Expression
     is_postfix: bool = False
+    
+@dataclass
+class ArrayAccess(Expression):
+    """Accesso a un elemento di array/vettore, es. c[i]."""
+
+    array: Expression   # es. DeclRef("c")
+    index: Expression   # es. DeclRef("i") oppure BinaryOperator(...)
+
 
 @dataclass
 class VarDecl:
@@ -86,7 +94,7 @@ class ReturnStmt:
 class AssignStmt:
     """Assignment of ``value`` to variable ``name``."""
 
-    name: str
+    name: Union[str, Expression]
     value: Expression
 
 
@@ -121,6 +129,7 @@ class ForStmt:
     condition: Optional[Expression]
     increment: Optional[AssignStmt]
     body: CompoundStmt
+    
 
 
 
@@ -128,71 +137,63 @@ class ForStmt:
 # Expression Parsing
 # -----------------------------------------------------------------------------
 
-def parse_expression(expr_node: Dict) -> Expression:
-    """Convert a JSON AST expression node into an ``Expression`` instance.
+def parse_expression(expr: Dict) -> Expression:
+    kind = expr.get("kind")
 
-    Parameters
-    ----------
-    expr_node:
-        Dictionary describing the expression as emitted by ``clang``.
-
-    Returns
-    -------
-    Expression
-        One of the dataclass instances defined in this module.
-    """
-    # ``kind`` indicates which concrete expression class we must construct.
-    kind = expr_node["kind"]
-
-    # Ignore implicit casts by looking through them.
-    if kind == "ImplicitCastExpr":
-        return parse_expression(expr_node["inner"][0])
-
-    # Parentheses merely contain another expression.
-    if kind == "ParenExpr":
-        return parse_expression(expr_node["inner"][0])
-
-    # Leaf node representing an integer constant.
     if kind == "IntegerLiteral":
-        return IntegerLiteral(int(expr_node["value"]))
+        # letterale intero, es. 5
+        value = int(expr["value"])
+        return IntegerLiteral(value)
 
-    # Reference to an existing variable declaration.
-    if kind == "DeclRefExpr":
-        if "name" in expr_node:
-            name = expr_node["name"]
-        elif "referencedDecl" in expr_node and "name" in expr_node["referencedDecl"]:
-            name = expr_node["referencedDecl"]["name"]
-        else:
-            raise ValueError(f"Cannot extract name from DeclRefExpr: {expr_node}")
+    elif kind == "DeclRefExpr":
+        # riferimento a variabile, es. acc, i, a, c
+        name = expr.get("name") or expr.get("referencedDecl", {}).get("name")
         return DeclRef(name)
 
-    # Binary operator such as ``+`` or ``*``.
-    if kind == "BinaryOperator":
-        opcode = expr_node["opcode"]
-        inner_nodes = expr_node.get("inner", [])
-        if len(inner_nodes) != 2:
-            raise ValueError(f"BinaryOperator must have 2 children: {expr_node}")
+    elif kind == "BinaryOperator":
+        # operazione binaria, es. a + b, i < N, ...
+        opcode = expr["opcode"]
+        inner = expr.get("inner", [])
+        lhs = parse_expression(inner[0])
+        rhs = parse_expression(inner[1])
 
-        # Recursively parse both operands.
-        lhs_expr = parse_expression(inner_nodes[0])
-        rhs_expr = parse_expression(inner_nodes[1])
+        # se uno dei due è una costante intera, possiamo usare BinaryOperatorWithImmediate
+        if isinstance(lhs, IntegerLiteral) or isinstance(rhs, IntegerLiteral):
+            return BinaryOperatorWithImmediate(opcode, lhs, rhs)
+        return BinaryOperator(opcode, lhs, rhs)
 
-        # If exactly one operand is a constant, treat it as an immediate form.
-        if isinstance(lhs_expr, IntegerLiteral) ^ isinstance(rhs_expr, IntegerLiteral):
-            return BinaryOperatorWithImmediate(opcode, lhs_expr, rhs_expr)
-        return BinaryOperator(opcode, lhs_expr, rhs_expr)
+    elif kind == "UnaryOperator":
+        # operatore unario, es. -x, ++i, i++
+        opcode = expr["opcode"]
+        inner = expr.get("inner", [])
+        operand = parse_expression(inner[0])
+        # se clang fornisse info su prefix/postfix, qui si potrebbe usarla;
+        # per ora impostiamo is_postfix=False di default
+        return UnaryOperator(opcode, operand, is_postfix=False)
 
-    # unary operations
-    if kind == "UnaryOperator":
-        opcode = expr_node["opcode"]
-        # The operand is usually wrapped in an ImplicitCastExpr — strip it.
-        operand_expr = parse_expression(expr_node["inner"][0])
-        is_postfix = expr_node.get("isPostfix", False)
-        return UnaryOperator(opcode, operand_expr, is_postfix)
-        
+    elif kind == "ParenExpr":
+        # parentesi, es. (a + b)
+        inner = expr.get("inner", [])
+        return parse_expression(inner[0])
 
+    elif kind == "ImplicitCastExpr":
+        # cast implicito: in genere basta propagare l'espressione interna
+        inner = expr.get("inner", [])
+        return parse_expression(inner[0])
 
-    raise ValueError(f"Unsupported expression node: {kind}")
+    elif kind == "ArraySubscriptExpr":
+        # accesso a vettore/array, es. c[i], a[i+1]
+        inner = expr.get("inner", [])
+        if len(inner) != 2:
+            raise ValueError("ArraySubscriptExpr with unexpected inner length")
+
+        base_expr = parse_expression(inner[0])   # es. DeclRef("c")
+        index_expr = parse_expression(inner[1])  # es. DeclRef("i") o BinaryOperator(...)
+        return ArrayAccess(base_expr, index_expr)
+
+    else:
+        raise ValueError(f"Unsupported expression node: {kind}")
+
 
 
 # -----------------------------------------------------------------------------
@@ -261,11 +262,38 @@ def parse_statement(stmt: Dict) -> Optional[Union[VarDecl, AssignStmt, ReturnStm
     elif kind == "BinaryOperator" and stmt["opcode"] == "=":
         lhs = stmt["inner"][0]
         rhs = stmt["inner"][1]
-        if lhs.get("kind") != "DeclRefExpr":
-            raise ValueError(f"Unsupported assignment LHS: {lhs['kind']}")
-        var_name = lhs.get("name") or lhs.get("referencedDecl", {}).get("name")
+
+        # Gestione LHS:
+        # - se è una variabile semplice (DeclRefExpr), usiamo il nome
+        # - altrimenti (es. ArraySubscriptExpr) lo trattiamo come espressione completa
+        if lhs.get("kind") == "DeclRefExpr":
+            var_name = lhs.get("name") or lhs.get("referencedDecl", {}).get("name")
+            target = var_name
+        else:
+            # Permette LHS come c[i], a[i+1], ecc. usando la stessa logica di parse_expression
+            target = parse_expression(lhs)
+
         rhs_expr = parse_expression(rhs)
-        return AssignStmt(var_name, rhs_expr)
+        return AssignStmt(target, rhs_expr)
+
+    elif kind == "UnaryOperator" and stmt.get("opcode") == "++":
+        # Gestione di i++ come statement di incremento: lo normalizziamo a i = i + 1
+        inner = stmt.get("inner", [])
+        if not inner:
+            raise ValueError("UnaryOperator ++ senza operando")
+
+        target_expr = parse_expression(inner[0])
+        if not isinstance(target_expr, DeclRef):
+            raise ValueError("Unsupported ++ on non-variable expression")
+
+        # i = i + 1  → BinaryOperatorWithImmediate("+", i, 1)
+        inc_expr = BinaryOperatorWithImmediate(
+            opcode="+",
+            lhs=target_expr,
+            rhs=IntegerLiteral(1),
+        )
+        # AssignStmt.name: usiamo il nome della variabile, non l'espressione
+        return AssignStmt(target_expr.name, inc_expr)
 
     elif kind == "ReturnStmt":
         if "inner" in stmt and stmt["inner"]:
@@ -322,6 +350,7 @@ def parse_statement(stmt: Dict) -> Optional[Union[VarDecl, AssignStmt, ReturnStm
         return ForStmt(init_stmt, condition_expr, increment_stmt, body)
 
     return None
+
 
 
 

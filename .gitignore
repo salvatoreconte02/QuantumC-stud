@@ -1,10 +1,21 @@
-.vscode
-__pycache__
-output
-pizzocch*
-old*
-qvenv
-mlir_out
-json_out
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Output directories (QuantumC pipeline)
+json_out/
+mlir_out/
+quantum_mlir_out/
+output/
+
+# macOS trash
 .DS_Store
-test_log
+
+# VSCode
+.vscode/

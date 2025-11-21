@@ -299,13 +299,16 @@ class QuantumTranslator:
     def compute_use_counts(self):
         """Populate ``self.use_count`` with the number of uses for each value."""
         # Walk through all operations in every function and count how many times
-        # each SSA value result is referenced.  The result is stored in the
+        # each SSA value result is referenced. The result is stored in the
         # ``use_count`` dictionary.
+
         for func in self.module.ops:
             block = func.body.blocks[0]
             for op in block.ops:
                 for res in op.results:
-                    self.use_count[res] = len(res.uses)
+                    # res.uses is IRUses, not a list -> count by iterating
+                    self.use_count[res] = sum(1 for _ in res.uses)
+
 
     # ------------------------------------------------------------------
     def compute_cost(self, val: SSAValue) -> int:
@@ -570,7 +573,7 @@ class QuantumTranslator:
 
         # ``remaining`` tracks how many uses of each SSA value remain while we
         # traverse the block.  Start with the global use counts.
-        remaining = {val: len(val.uses) for val in self.use_count}
+        remaining = {val: sum(1 for _ in val.uses) for val in self.use_count}
 
         # Translate each operation in order.
         for op in block.ops:
