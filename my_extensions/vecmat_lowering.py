@@ -15,8 +15,18 @@ from step2_ast_to_dataclasses.c_ast import (
     BinaryOperatorWithImmediate,
     ArrayAccess,
 )
-from my_extensions.vecmat_ir import VecMatModule, VecMatFunction, VecAddOp, VecDotOp
+from my_extensions.vecmat_ir import (
+    VecMatModule,
+    VecMatFunction,
+    VecAddOp,
+    VecDotOp,
+    MatMulOp,
+)
 
+
+# =========================
+# vec_add
+# =========================
 
 def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     """
@@ -37,7 +47,7 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
         return None
     idx_name = init.name
 
-    # 2) condition: BinaryOperatorWithImmediate("<" o "<=", DeclRef(idx_name), IntegerLiteral(N))
+    # 2) condition: idx < N
     cond = for_stmt.condition
     if not isinstance(cond, BinaryOperatorWithImmediate):
         return None
@@ -49,7 +59,7 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
         return None
     length = cond.rhs.value
 
-    # 3) increment: i = i + 1
+    # 3) increment: idx = idx + 1
     incr = for_stmt.increment
     if not isinstance(incr, AssignStmt):
         return None
@@ -114,6 +124,10 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
         elem_bits=elem_bits,
     )
 
+
+# =========================
+# vec_dot
+# =========================
 
 def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     """
@@ -219,11 +233,266 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     )
 
 
+# =========================
+# matmul (triplo loop)
+# =========================
+
+def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
+    """
+    Riconosce il pattern:
+
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < N; j++) {
+                c[i][j] = 0;
+                for (int k = 0; k < K; k++) {
+                    c[i][j] = c[i][j] + a[i][k] * b[k][j];
+                }
+            }
+        }
+    """
+
+    # ----- for i -----
+    init_i = for_i.init
+    if not isinstance(init_i, VarDecl):
+        return None
+    if not isinstance(init_i.init, IntegerLiteral) or init_i.init.value != 0:
+        return None
+    i_name = init_i.name
+
+    cond_i = for_i.condition
+    if not isinstance(cond_i, BinaryOperatorWithImmediate):
+        return None
+    if cond_i.opcode not in ("<", "<="):
+        return None
+    if not isinstance(cond_i.lhs, DeclRef) or cond_i.lhs.name != i_name:
+        return None
+    if not isinstance(cond_i.rhs, IntegerLiteral):
+        return None
+    m = cond_i.rhs.value  # numero di righe
+
+    incr_i = for_i.increment
+    if not isinstance(incr_i, AssignStmt):
+        return None
+    if incr_i.name != i_name:
+        return None
+    incr_i_expr = incr_i.value
+    if not isinstance(incr_i_expr, BinaryOperatorWithImmediate):
+        return None
+    if incr_i_expr.opcode != "+":
+        return None
+    if not isinstance(incr_i_expr.lhs, DeclRef) or incr_i_expr.lhs.name != i_name:
+        return None
+    if not isinstance(incr_i_expr.rhs, IntegerLiteral) or incr_i_expr.rhs.value != 1:
+        return None
+
+    # body i: ci aspettiamo un solo ForStmt (for j)
+    body_i = for_i.body
+    if not isinstance(body_i, CompoundStmt):
+        return None
+    if len(body_i.stmts) != 1:
+        return None
+    for_j = body_i.stmts[0]
+    if not isinstance(for_j, ForStmt):
+        return None
+
+    # ----- for j -----
+    init_j = for_j.init
+    if not isinstance(init_j, VarDecl):
+        return None
+    if not isinstance(init_j.init, IntegerLiteral) or init_j.init.value != 0:
+        return None
+    j_name = init_j.name
+
+    cond_j = for_j.condition
+    if not isinstance(cond_j, BinaryOperatorWithImmediate):
+        return None
+    if cond_j.opcode not in ("<", "<="):
+        return None
+    if not isinstance(cond_j.lhs, DeclRef) or cond_j.lhs.name != j_name:
+        return None
+    if not isinstance(cond_j.rhs, IntegerLiteral):
+        return None
+    n = cond_j.rhs.value  # numero di colonne
+
+    incr_j = for_j.increment
+    if not isinstance(incr_j, AssignStmt):
+        return None
+    if incr_j.name != j_name:
+        return None
+    incr_j_expr = incr_j.value
+    if not isinstance(incr_j_expr, BinaryOperatorWithImmediate):
+        return None
+    if incr_j_expr.opcode != "+":
+        return None
+    if not isinstance(incr_j_expr.lhs, DeclRef) or incr_j_expr.lhs.name != j_name:
+        return None
+    if not isinstance(incr_j_expr.rhs, IntegerLiteral) or incr_j_expr.rhs.value != 1:
+        return None
+
+    # body j: ci aspettiamo [ AssignStmt(c[i][j] = 0), ForStmt(k) ]
+    body_j = for_j.body
+    if not isinstance(body_j, CompoundStmt):
+        return None
+    if len(body_j.stmts) != 2:
+        return None
+
+    zero_stmt = body_j.stmts[0]
+    for_k = body_j.stmts[1]
+    if not isinstance(zero_stmt, AssignStmt):
+        return None
+    if not isinstance(for_k, ForStmt):
+        return None
+
+    # c[i][j] = 0;
+    lhs_zero = zero_stmt.name
+    if not isinstance(lhs_zero, ArrayAccess):
+        return None
+    if not isinstance(lhs_zero.array, ArrayAccess):
+        return None
+    c_outer = lhs_zero.array
+    if not isinstance(c_outer.array, DeclRef):
+        return None
+    dest_name = c_outer.array.name  # "c"
+    if not isinstance(c_outer.index, DeclRef) or c_outer.index.name != i_name:
+        return None
+    if not isinstance(lhs_zero.index, DeclRef) or lhs_zero.index.name != j_name:
+        return None
+    if not isinstance(zero_stmt.value, IntegerLiteral) or zero_stmt.value.value != 0:
+        return None
+
+    # ----- for k -----
+    init_k = for_k.init
+    if not isinstance(init_k, VarDecl):
+        return None
+    if not isinstance(init_k.init, IntegerLiteral) or init_k.init.value != 0:
+        return None
+    k_name = init_k.name
+
+    cond_k = for_k.condition
+    if not isinstance(cond_k, BinaryOperatorWithImmediate):
+        return None
+    if cond_k.opcode not in ("<", "<="):
+        return None
+    if not isinstance(cond_k.lhs, DeclRef) or cond_k.lhs.name != k_name:
+        return None
+    if not isinstance(cond_k.rhs, IntegerLiteral):
+        return None
+    k_dim = cond_k.rhs.value  # dimensione interna
+
+    incr_k = for_k.increment
+    if not isinstance(incr_k, AssignStmt):
+        return None
+    if incr_k.name != k_name:
+        return None
+    incr_k_expr = incr_k.value
+    if not isinstance(incr_k_expr, BinaryOperatorWithImmediate):
+        return None
+    if incr_k_expr.opcode != "+":
+        return None
+    if not isinstance(incr_k_expr.lhs, DeclRef) or incr_k_expr.lhs.name != k_name:
+        return None
+    if not isinstance(incr_k_expr.rhs, IntegerLiteral) or incr_k_expr.rhs.value != 1:
+        return None
+
+    # body k: un solo AssignStmt con accumulo:
+    # c[i][j] = c[i][j] + a[i][k] * b[k][j];
+    body_k = for_k.body
+    if not isinstance(body_k, CompoundStmt):
+        return None
+    if len(body_k.stmts) != 1:
+        return None
+    update_stmt = body_k.stmts[0]
+    if not isinstance(update_stmt, AssignStmt):
+        return None
+
+    lhs_update = update_stmt.name
+    if not isinstance(lhs_update, ArrayAccess):
+        return None
+    if not isinstance(lhs_update.array, ArrayAccess):
+        return None
+    c_outer2 = lhs_update.array
+    if not isinstance(c_outer2.array, DeclRef) or c_outer2.array.name != dest_name:
+        return None
+    if not isinstance(c_outer2.index, DeclRef) or c_outer2.index.name != i_name:
+        return None
+    if not isinstance(lhs_update.index, DeclRef) or lhs_update.index.name != j_name:
+        return None
+
+    rhs_update = update_stmt.value
+    if not isinstance(rhs_update, BinaryOperator) or rhs_update.opcode != "+":
+        return None
+
+    # lhs del '+' deve essere ancora c[i][j]
+    lhs_sum = rhs_update.lhs
+    if not isinstance(lhs_sum, ArrayAccess):
+        return None
+    if not isinstance(lhs_sum.array, ArrayAccess):
+        return None
+    c_outer3 = lhs_sum.array
+    if not isinstance(c_outer3.array, DeclRef) or c_outer3.array.name != dest_name:
+        return None
+    if not isinstance(c_outer3.index, DeclRef) or c_outer3.index.name != i_name:
+        return None
+    if not isinstance(lhs_sum.index, DeclRef) or lhs_sum.index.name != j_name:
+        return None
+
+    # rhs del '+' deve essere un prodotto: a[i][k] * b[k][j]
+    mul = rhs_update.rhs
+    if not isinstance(mul, BinaryOperator) or mul.opcode != "*":
+        return None
+
+    # a[i][k]
+    a_term = mul.lhs
+    if not isinstance(a_term, ArrayAccess):
+        return None
+    if not isinstance(a_term.array, ArrayAccess):
+        return None
+    a_outer = a_term.array
+    if not isinstance(a_outer.array, DeclRef):
+        return None
+    lhs_name = a_outer.array.name  # "a"
+    if not isinstance(a_outer.index, DeclRef) or a_outer.index.name != i_name:
+        return None
+    if not isinstance(a_term.index, DeclRef) or a_term.index.name != k_name:
+        return None
+
+    # b[k][j]
+    b_term = mul.rhs
+    if not isinstance(b_term, ArrayAccess):
+        return None
+    if not isinstance(b_term.array, ArrayAccess):
+        return None
+    b_outer = b_term.array
+    if not isinstance(b_outer.array, DeclRef):
+        return None
+    rhs_name = b_outer.array.name  # "b"
+    if not isinstance(b_outer.index, DeclRef) or b_outer.index.name != k_name:
+        return None
+    if not isinstance(b_term.index, DeclRef) or b_term.index.name != j_name:
+        return None
+
+    return MatMulOp(
+        dest=dest_name,
+        lhs=lhs_name,
+        rhs=rhs_name,
+        m=m,
+        n=n,
+        k=k_dim,
+        elem_bits=elem_bits,
+    )
+
+
+# =========================
+# Conversione generale
+# =========================
+
 def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
     """
     Converte un TranslationUnit (dataclass C) in un VecMatModule
-    del dialetto vettoriale/matriciale, riconoscendo solo i pattern
-    base vec_add e vec_dot.
+    riconoscendo i pattern:
+    - matmul (triplo loop i,j,k)
+    - vec_add
+    - vec_dot
     """
 
     module = VecMatModule()
@@ -236,19 +505,25 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
 
         for stmt in func.body.stmts:
             if isinstance(stmt, ForStmt):
-                # Prova prima vec_add
+                # 1) prova matmul sul for esterno (i)
+                matmul_op = _match_matmul_for(stmt, elem_bits)
+                if matmul_op is not None:
+                    vec_func.ops.append(matmul_op)
+                    continue
+
+                # 2) prova vec_add
                 vec_add_op = _match_vec_add_for(stmt, elem_bits)
                 if vec_add_op is not None:
                     vec_func.ops.append(vec_add_op)
                     continue
 
-                # Poi prova vec_dot
+                # 3) prova vec_dot
                 vec_dot_op = _match_vec_dot_for(stmt, elem_bits)
                 if vec_dot_op is not None:
                     vec_func.ops.append(vec_dot_op)
                     continue
 
-                # Altri pattern di for: non supportati per ora
+                # altri for: non gestiti per ora
 
         module.functions.append(vec_func)
 

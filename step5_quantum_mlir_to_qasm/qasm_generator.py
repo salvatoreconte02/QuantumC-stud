@@ -50,6 +50,15 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
             tail = f" -> {msg}" if msg else ""
             print(f"[{op_type}] {result} = {op.name}({operands}){tail}")
 
+    def _get_reg(val):
+        """Restituisce il registro associato a `val`, oppure ne crea uno fittizio."""
+        if val not in reg_map:
+            if verbose:
+                print(f"[WARN] Operand {val} non presente in reg_map, inizializzo un registro a 0.")
+            reg = qa.initialize_variable(qc, 0)
+            reg_map[val] = reg
+        return reg_map[val]
+
     for func in module.ops:
         block = func.body.blocks[0]
         for op in block.ops:
@@ -61,74 +70,118 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
 
             elif isinstance(op, QuantumCInitOp):
                 val = int(op.value.value.data)
-                ctrl = reg_map[op.ctrl]
+                ctrl = _get_reg(op.ctrl)
                 log_op(op, f"c_init {val} controlled by {op.ctrl}")
                 reg = qac.initialize_variable_controlled(qc, val, ctrl)
                 reg_map[op.results[0]] = reg
 
             elif isinstance(op, QAddiOp):
                 log_op(op, "add")
-                reg_map[op.results[0]] = qa.add(qc, reg_map[op.lhs], reg_map[op.rhs])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                reg_map[op.results[0]] = qa.add(qc, lhs, rhs)
+
             elif isinstance(op, QSubiOp):
                 log_op(op, "sub")
-                reg_map[op.results[0]] = qa.sub(qc, reg_map[op.lhs], reg_map[op.rhs])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                reg_map[op.results[0]] = qa.sub(qc, lhs, rhs)
+
             elif isinstance(op, QMuliOp):
                 log_op(op, "mul")
-                reg_map[op.results[0]] = qa.mul(qc, reg_map[op.lhs], reg_map[op.rhs])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                reg_map[op.results[0]] = qa.mul(qc, lhs, rhs)
+
             elif isinstance(op, QDivSOp):
                 log_op(op, "div")
-                reg_map[op.results[0]], _ = qa.div(qc, reg_map[op.lhs], reg_map[op.rhs])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                reg_map[op.results[0]], _ = qa.div(qc, lhs, rhs)
 
             elif isinstance(op, QAddiImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"addi_imm {imm}")
-                reg_map[op.results[0]] = qa.addi(qc, reg_map[op.lhs], imm)
+                lhs = _get_reg(op.lhs)
+                reg_map[op.results[0]] = qa.addi(qc, lhs, imm)
+
             elif isinstance(op, QSubiImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"subi_imm {imm}")
-                reg_map[op.results[0]] = qa.subi(qc, reg_map[op.lhs], imm)
+                lhs = _get_reg(op.lhs)
+                reg_map[op.results[0]] = qa.subi(qc, lhs, imm)
+
             elif isinstance(op, QMuliImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"muli_imm {imm}")
-                reg_map[op.results[0]] = qa.muli(qc, reg_map[op.lhs], imm)
+                lhs = _get_reg(op.lhs)
+                reg_map[op.results[0]] = qa.muli(qc, lhs, imm)
+
             elif isinstance(op, QDivSImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"divi_imm {imm}")
-                reg_map[op.results[0]], _ = qa.divi(qc, reg_map[op.lhs], imm)
+                lhs = _get_reg(op.lhs)
+                reg_map[op.results[0]], _ = qa.divi(qc, lhs, imm)
 
             elif isinstance(op, CQAddiOp):
                 log_op(op, "c_add")
-                reg_map[op.results[0]] = qac.add_controlled(qc, reg_map[op.lhs], reg_map[op.rhs], reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.add_controlled(qc, lhs, rhs, ctrl)
+
             elif isinstance(op, CQSubiOp):
                 log_op(op, "c_sub")
-                reg_map[op.results[0]] = qac.sub_controlled(qc, reg_map[op.lhs], reg_map[op.rhs], reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.sub_controlled(qc, lhs, rhs, ctrl)
+
             elif isinstance(op, CQMuliOp):
                 log_op(op, "c_mul")
-                reg_map[op.results[0]] = qac.mul_controlled(qc, reg_map[op.lhs], reg_map[op.rhs], reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.mul_controlled(qc, lhs, rhs, ctrl)
+
             elif isinstance(op, CQDivSOp):
                 log_op(op, "c_div")
-                reg_map[op.results[0]], _ = qac.div_controlled(qc, reg_map[op.lhs], reg_map[op.rhs], reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]], _ = qac.div_controlled(qc, lhs, rhs, ctrl)
 
             elif isinstance(op, CQAddiImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"c_addi_imm {imm}")
-                reg_map[op.results[0]] = qac.addi_controlled(qc, reg_map[op.lhs], imm, reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.addi_controlled(qc, lhs, imm, ctrl)
+
             elif isinstance(op, CQSubiImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"c_subi_imm {imm}")
-                reg_map[op.results[0]] = qac.subi_controlled(qc, reg_map[op.lhs], imm, reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.subi_controlled(qc, lhs, imm, ctrl)
+
             elif isinstance(op, CQMuliImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"c_muli_imm {imm}")
-                reg_map[op.results[0]] = qac.muli_controlled(qc, reg_map[op.lhs], imm, reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]] = qac.muli_controlled(qc, lhs, imm, ctrl)
+
             elif isinstance(op, CQDivSImmOp):
                 imm = int(op.imm.value.data)
                 log_op(op, f"c_divi_imm {imm}")
-                reg_map[op.results[0]], _ = qac.divi_controlled(qc, reg_map[op.lhs], imm, reg_map[op.ctrl])
+                lhs = _get_reg(op.lhs)
+                ctrl = _get_reg(op.ctrl)
+                reg_map[op.results[0]], _ = qac.divi_controlled(qc, lhs, imm, ctrl)
 
             elif isinstance(op, QCmpiOp):
-                lhs = reg_map[op.lhs]
-                rhs = reg_map[op.rhs]
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
                 predicate = int(op.predicate.value.data)
                 msg = ["eq", "neq", "lt", "le", "gt", "ge"][predicate]
                 log_op(op, f"cmpi.{msg}")
@@ -149,12 +202,12 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
 
             elif isinstance(op, QAndOp):
                 log_op(op, "and")
-                lhs = reg_map[op.lhs]
-                rhs = reg_map[op.rhs]
+                lhs = _get_reg(op.lhs)
+                rhs = _get_reg(op.rhs)
                 reg_map[op.results[0]] = qa.logical_and(qc, lhs, rhs)
 
             elif isinstance(op, QNotOp):
-                operand = reg_map[op.operand]
+                operand = _get_reg(op.operand)
                 existing_names = {reg.name for reg in qc.qregs}
                 idx = 0
                 while f"not{idx}" in existing_names:
@@ -165,16 +218,29 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
                 reg_map[op.results[0]] = out
 
             elif isinstance(op, ReturnOp):
-                if op.operands:
-                    log_op(op, f"return {op.operands[0]}")
-                    try:
-                        qa.measure(qc, reg_map[op.operands[0]])
-                    except Exception as e:  # duplicate measurement
-                        if "already exists" in str(e):
-                            if verbose:
-                                print(f"Skipping duplicate measurement for {reg_map[op.operands[0]].name}")
-                        else:
-                            raise
+                if not op.operands:
+                    log_op(op, "return (void)")
+                    continue
+
+                ret_val = op.operands[0]
+                log_op(op, f"return {ret_val}")
+
+                if ret_val not in reg_map:
+                    if verbose:
+                        print(
+                            f"[WARN] Return value {ret_val} non presente in reg_map, "
+                            f"nessuna misura eseguita (caso ibrido/vettoriale)."
+                        )
+                    continue
+
+                try:
+                    qa.measure(qc, reg_map[ret_val])
+                except Exception as e:  # duplicate measurement o altro
+                    if "already exists" in str(e):
+                        if verbose:
+                            print(f"Skipping duplicate measurement for {reg_map[ret_val].name}")
+                    else:
+                        raise
             else:
                 raise NotImplementedError(f"Unsupported op {op.name}")
 
@@ -194,21 +260,20 @@ def export_qasm(circuit: QuantumCircuit, path: str) -> str:
     print(f"QASM circuit written to {path}")
     return path
 
+
 import os
 from qiskit import QuantumCircuit, transpile
 from qiskit.qasm2 import dumps
 from qiskit.transpiler import PassManager
 
+
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:
     """Export the circuit to QASM with Clifford+T-only basis."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # Transpile directly to Clifford+T
     clifford_t_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
     transpiled = transpile(circuit, basis_gates=clifford_t_basis, optimization_level=3)
 
-    # Write to QASM2
-    from qiskit.qasm2 import dumps
     with open(path, "w") as f:
         f.write(dumps(transpiled))
     print(f"✅ QASM written to: {path}")

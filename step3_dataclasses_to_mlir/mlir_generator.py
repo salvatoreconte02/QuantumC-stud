@@ -18,9 +18,11 @@ from step2_ast_to_dataclasses.c_ast import (
     CompoundStmt,
     IfStmt,
     ForStmt,
+    ArrayAccess,
 )
 
 MAX_UNROLL = 10
+
 
 class MLIRGenerator:
     def __init__(self) -> None:
@@ -28,6 +30,9 @@ class MLIRGenerator:
         self.current_block: Block | None = None
         self.function_region: Region | None = None
 
+    # ------------------------------------------------------------------
+    # Espressioni
+    # ------------------------------------------------------------------
     def process_expression(self, expr: Expression) -> SSAValue:
         if isinstance(expr, IntegerLiteral):
             op = ConstantOp.from_int_and_width(expr.value, 32)
@@ -146,7 +151,135 @@ class MLIRGenerator:
 
         raise TypeError(f"Unsupported expression type: {type(expr)}")
 
+    # ------------------------------------------------------------------
+    # Helper per gli statement “semplici”
+    # ------------------------------------------------------------------
+    def lower_vardecl(self, stmt: VarDecl) -> None:
+        """
+        Abbassa una dichiarazione di variabile scalare.
+        Se non ha init, per semplicità si inizializza a 0.
+        """
+        if stmt.init is not None:
+            val = self.process_expression(stmt.init)
+        else:
+            const0 = ConstantOp.from_int_and_width(0, 32)
+            self.current_block.add_op(const0)
+            val = const0.results[0]
+        self.symbol_table[stmt.name] = val
 
+    def lower_assign(self, stmt: AssignStmt) -> None:
+        """
+        Abbassa un assegnamento scalare:
+            x = expr;
+        Se il LHS non è un nome scalare (es. è ArrayAccess), per il backend
+        scalare lo si ignora: quei casi sono gestiti dal dialetto vettoriale.
+        """
+        # LHS scalare: nome o DeclRef
+        if isinstance(stmt.name, str):
+            var_name = stmt.name
+        elif isinstance(stmt.name, DeclRef):
+            var_name = stmt.name.name
+        else:
+            # Esempio: ArrayAccess per vettori/matrici -> ignorato qui
+            return
+
+        rhs_val = self.process_expression(stmt.value)
+        self.symbol_table[var_name] = rhs_val
+
+    def lower_return(self, stmt: ReturnStmt) -> None:
+        """
+        Abbassa un return; se senza valore, ritorna 0.
+        """
+        if stmt.value is None:
+            const0 = ConstantOp.from_int_and_width(0, 32)
+            self.current_block.add_op(const0)
+            ret = ReturnOp(const0.results[0])
+        else:
+            val = self.process_expression(stmt.value)
+            ret = ReturnOp(val)
+        self.current_block.add_op(ret)
+
+    # ------------------------------------------------------------------
+    # Abbassamento di blocchi (con skip dei for vettoriali)
+    # ------------------------------------------------------------------
+    def _lower_block(self, stmts: list) -> None:
+        """
+        Abbassa una lista di statement del nostro AST in MLIR scalare.
+
+        Nota importante:
+        - i loop che implementano kernel vettoriali/matriciali (vec_add, vec_dot, ecc.)
+          vengono SALTATI qui, perché sono gestiti dal dialetto VecMat/QAR.
+        """
+        i = 0
+        while i < len(stmts):
+            stmt = stmts[i]
+
+            # -------------------------
+            # Dichiarazioni di variabili
+            # -------------------------
+            if isinstance(stmt, VarDecl):
+                self.lower_vardecl(stmt)
+
+            # ---------------
+            # Assegnamenti
+            # ---------------
+            elif isinstance(stmt, AssignStmt):
+                self.lower_assign(stmt)
+
+            # ---------------
+            # If
+            # ---------------
+            elif isinstance(stmt, IfStmt):
+                self.lower_if(stmt, stmts[i + 1:])
+
+            # ---------------
+            # For
+            # ---------------
+            elif isinstance(stmt, ForStmt):
+                is_vec_loop = False
+                body = stmt.body
+
+                if isinstance(body, CompoundStmt) and len(body.stmts) == 1:
+                    inner = body.stmts[0]
+
+                    # Caso 1: c[i] = a[i] + b[i];  (vec_add)
+                    if isinstance(inner, AssignStmt):
+                        # LHS array -> tipico vec_add
+                        if isinstance(inner.name, ArrayAccess):
+                            is_vec_loop = True
+                        else:
+                            # Caso 2: s = s + a[i] * b[i];  (vec_dot)
+                            rhs = inner.value
+                            if (
+                                isinstance(rhs, BinaryOperator)
+                                and rhs.opcode == "+"
+                                and isinstance(rhs.rhs, BinaryOperator)
+                                and rhs.rhs.opcode == "*"
+                                and isinstance(rhs.rhs.lhs, ArrayAccess)
+                                and isinstance(rhs.rhs.rhs, ArrayAccess)
+                            ):
+                                # pattern del prodotto scalare
+                                is_vec_loop = True
+
+                if is_vec_loop:
+                    # Questo for è un kernel vettoriale/matriciale:
+                    # viene gestito dal dialetto VecMat/QAR, quindi
+                    # NON lo abbassiamo in MLIR scalare.
+                    i += 1
+                    continue
+
+                # Caso normale: for davvero scalare → usa la logica originale
+                self.lower_for(stmt, stmts[i + 1:])
+
+            # ---------------
+            # Altri statement (se presenti)
+            # ---------------
+
+            i += 1
+
+    # ------------------------------------------------------------------
+    # If / For (come prima, ma usando _lower_block aggiornato)
+    # ------------------------------------------------------------------
     def lower_if(self, stmt: IfStmt, tail: list) -> None:
         if isinstance(stmt.condition, BinaryOperator) and stmt.condition.opcode in ("&&", "||"):
             lhs = stmt.condition.lhs
@@ -167,8 +300,7 @@ class MLIRGenerator:
 
             elif stmt.condition.opcode == "||":
                 then_copy_1 = stmt.then_body
-                then_copy_2 = stmt.then_body  # Optional: deepcopy if necessary
-
+                then_copy_2 = stmt.then_body
                 self.lower_if(IfStmt(condition=lhs, then_body=then_copy_1), tail)
                 self.lower_if(IfStmt(condition=rhs, then_body=then_copy_2), tail)
             return
@@ -207,9 +339,11 @@ class MLIRGenerator:
         self.function_region.add_block(else_block)
         self.current_block.add_op(CondBranchOp(cond_val, then_block, [], else_block, []))
 
+        # ramo "else": esci dal loop, continua col tail
         self.current_block = else_block
         self._lower_block(tail)
 
+        # unrolling statico fino a MAX_UNROLL
         for _ in range(MAX_UNROLL):
             self.current_block = then_block
             self._lower_block(stmt.body.stmts)
@@ -229,32 +363,17 @@ class MLIRGenerator:
 
             then_block = next_then
 
-    def _lower_block(self, stmts: list) -> None:
-        i = 0
-        while i < len(stmts):
-            stmt = stmts[i]
-            if isinstance(stmt, IfStmt):
-                self.lower_if(stmt, stmts[i+1:])
-                return
-            elif isinstance(stmt, ForStmt):
-                self.lower_for(stmt, stmts[i+1:])
-                return
-            elif isinstance(stmt, VarDecl):
-                self.symbol_table[stmt.name] = self.process_expression(stmt.init) if stmt.init else None
-            elif isinstance(stmt, AssignStmt):
-                self.symbol_table[stmt.name] = self.process_expression(stmt.value)
-            elif isinstance(stmt, ReturnStmt):
-                ret_val = self.process_expression(stmt.value) if stmt.value else []
-                self.current_block.add_op(ReturnOp(ret_val))
-                return
-            i += 1
-
+    # ------------------------------------------------------------------
+    # Generazione funzione
+    # ------------------------------------------------------------------
     def generate_function(self, func: FunctionDecl) -> FuncOp:
         self.symbol_table.clear()
         entry_block = Block()
         self.function_region = Region()
         self.function_region.add_block(entry_block)
         self.current_block = entry_block
+
         self._lower_block(func.body.stmts)
+
         func_type = ([i32] * len(func.params), [i32])
         return FuncOp(func.name, func_type, self.function_region)
