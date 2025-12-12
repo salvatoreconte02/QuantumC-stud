@@ -5,7 +5,7 @@ import os
 from typing import Dict
 
 from qiskit import QuantumCircuit
-from xdsl.dialects.func import ReturnOp
+from xdsl.dialects.func import FuncOp, ReturnOp
 from xdsl.dialects.builtin import ModuleOp
 
 from step4_mlir_to_quantum_mlir.quantum_dialect import (
@@ -38,15 +38,39 @@ from . import q_arithmetics_controlled as qac
 
 def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False) -> QuantumCircuit:
     """Convert ``module`` using the quantum dialect to a ``QuantumCircuit``."""
+
+    # ------------------------------------------------------------
+    # Sync robusto del numero di bit su tutti i moduli coinvolti
+    # ------------------------------------------------------------
     qa.set_number_of_bits(num_bits)
+    if hasattr(qa, "NUMBER_OF_BITS"):
+        qa.NUMBER_OF_BITS = num_bits
+
+    # q_arithmetics_controlled può mantenere uno stato proprio
+    if hasattr(qac, "set_number_of_bits"):
+        try:
+            qac.set_number_of_bits(num_bits)
+        except Exception:
+            pass
+    qac.__dict__["NUMBER_OF_BITS"] = num_bits
+
+    # se qac mantiene un riferimento interno a qa, sincronizza anche quello
+    if hasattr(qac, "qa"):
+        try:
+            qac.qa.set_number_of_bits(num_bits)
+        except Exception:
+            pass
+        if hasattr(qac.qa, "NUMBER_OF_BITS"):
+            qac.qa.NUMBER_OF_BITS = num_bits
+
     qc = QuantumCircuit()
     reg_map: Dict[object, object] = {}
 
     def log_op(op, msg=None):
         if verbose:
-            result = op.results[0] if op.results else "?"
+            result = op.results[0] if getattr(op, "results", None) else "?"
             op_type = op.__class__.__name__
-            operands = ", ".join(str(a) for a in op.operands)
+            operands = ", ".join(str(a) for a in getattr(op, "operands", []))
             tail = f" -> {msg}" if msg else ""
             print(f"[{op_type}] {result} = {op.name}({operands}){tail}")
 
@@ -59,8 +83,22 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
             reg_map[val] = reg
         return reg_map[val]
 
-    for func in module.ops:
-        block = func.body.blocks[0]
+    # ------------------------------------------------------------
+    # FIX CRITICO: iterazione corretta delle funzioni nel modulo xdsl
+    # ------------------------------------------------------------
+    top = module.body.blocks[0]
+
+    for top_op in top.ops:
+        if not isinstance(top_op, FuncOp):
+            # ignora eventuali simboli/operazioni top-level non-funzione
+            continue
+
+        block = top_op.body.blocks[0]
+
+        # --------------------------------------------------------
+        # (Robustezza) Prima passata: materializza TUTTI gli init
+        # così reg_map è popolata prima di qualsiasi uso.
+        # --------------------------------------------------------
         for op in block.ops:
             if isinstance(op, QuantumInitOp):
                 val = int(op.value.value.data)
@@ -75,7 +113,15 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
                 reg = qac.initialize_variable_controlled(qc, val, ctrl)
                 reg_map[op.results[0]] = reg
 
-            elif isinstance(op, QAddiOp):
+        # --------------------------------------------------------
+        # Seconda passata: tutte le altre operazioni + return
+        # --------------------------------------------------------
+        for op in block.ops:
+            # init già gestiti sopra
+            if isinstance(op, (QuantumInitOp, QuantumCInitOp)):
+                continue
+
+            if isinstance(op, QAddiOp):
                 log_op(op, "add")
                 lhs = _get_reg(op.lhs)
                 rhs = _get_reg(op.rhs)
@@ -185,6 +231,7 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
                 predicate = int(op.predicate.value.data)
                 msg = ["eq", "neq", "lt", "le", "gt", "ge"][predicate]
                 log_op(op, f"cmpi.{msg}")
+
                 if predicate == 0:
                     reg_map[op.results[0]] = qa.equal(qc, lhs, rhs)
                 elif predicate == 1:
@@ -235,12 +282,13 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
 
                 try:
                     qa.measure(qc, reg_map[ret_val])
-                except Exception as e:  # duplicate measurement o altro
+                except Exception as e:
                     if "already exists" in str(e):
                         if verbose:
                             print(f"Skipping duplicate measurement for {reg_map[ret_val].name}")
                     else:
                         raise
+
             else:
                 raise NotImplementedError(f"Unsupported op {op.name}")
 
@@ -261,10 +309,8 @@ def export_qasm(circuit: QuantumCircuit, path: str) -> str:
     return path
 
 
-import os
-from qiskit import QuantumCircuit, transpile
+from qiskit import transpile
 from qiskit.qasm2 import dumps
-from qiskit.transpiler import PassManager
 
 
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:

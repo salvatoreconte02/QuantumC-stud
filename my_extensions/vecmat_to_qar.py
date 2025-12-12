@@ -16,9 +16,11 @@ def from_vecmat_to_qar(vm_module: VecMatModule) -> QarModule:
     """
     qar_mod = QarModule()
 
-    # --- NEW: copia inizializzazioni costanti ---
-    qar_mod.const_arrays = dict(getattr(vm_module, "const_arrays", {}))
-    qar_mod.const_shapes = dict(getattr(vm_module, "const_shapes", {}))
+    # Copia inizializzazioni costanti (difensivo)
+    vm_const_arrays = getattr(vm_module, "const_arrays", {}) or {}
+    vm_const_shapes = getattr(vm_module, "const_shapes", {}) or {}
+    qar_mod.const_arrays = dict(vm_const_arrays)
+    qar_mod.const_shapes = dict(vm_const_shapes)
 
     for func in vm_module.functions:
         qar_func = QarFunction(name=func.name)
@@ -56,8 +58,6 @@ def from_vecmat_to_qar(vm_module: VecMatModule) -> QarModule:
                         elem_bits=op.elem_bits,
                     )
                 )
-            else:
-                pass
 
         qar_mod.functions.append(qar_func)
 

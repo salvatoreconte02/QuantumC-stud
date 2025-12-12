@@ -1,6 +1,6 @@
 # my_extensions/vecmat_lowering.py
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple
 
 from step2_ast_to_dataclasses.c_ast import (
     TranslationUnit,
@@ -14,7 +14,7 @@ from step2_ast_to_dataclasses.c_ast import (
     BinaryOperator,
     BinaryOperatorWithImmediate,
     ArrayAccess,
-    InitList,          # NUOVO
+    InitList,
 )
 
 from my_extensions.vecmat_ir import (
@@ -33,13 +33,10 @@ from my_extensions.vecmat_ir import (
 def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     """
     Riconosce:
-
         for (int i = 0; i < N; i++) {
             c[i] = a[i] + b[i];
         }
     """
-
-    # 1) init: VarDecl(name=idx_name, init=IntegerLiteral(0))
     init = for_stmt.init
     if not isinstance(init, VarDecl):
         return None
@@ -49,7 +46,6 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
         return None
     idx_name = init.name
 
-    # 2) condition: idx < N
     cond = for_stmt.condition
     if not isinstance(cond, BinaryOperatorWithImmediate):
         return None
@@ -61,7 +57,6 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
         return None
     length = cond.rhs.value
 
-    # 3) increment: idx = idx + 1
     incr = for_stmt.increment
     if not isinstance(incr, AssignStmt):
         return None
@@ -77,7 +72,6 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     if not isinstance(incr_expr.rhs, IntegerLiteral) or incr_expr.rhs.value != 1:
         return None
 
-    # 4) body: un solo AssignStmt: c[i] = a[i] + b[i];
     body = for_stmt.body
     if not isinstance(body, CompoundStmt):
         return None
@@ -134,13 +128,10 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
 def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     """
     Riconosce:
-
         for (int i = 0; i < N; i++) {
             s = s + a[i] * b[i];
         }
     """
-
-    # 1) init: int idx = 0;
     init = for_stmt.init
     if not isinstance(init, VarDecl):
         return None
@@ -150,7 +141,6 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
         return None
     idx_name = init.name
 
-    # 2) condition: idx < N
     cond = for_stmt.condition
     if not isinstance(cond, BinaryOperatorWithImmediate):
         return None
@@ -162,7 +152,6 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
         return None
     length = cond.rhs.value
 
-    # 3) increment: idx = idx + 1
     incr = for_stmt.increment
     if not isinstance(incr, AssignStmt):
         return None
@@ -178,7 +167,6 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     if not isinstance(incr_expr.rhs, IntegerLiteral) or incr_expr.rhs.value != 1:
         return None
 
-    # 4) body: un solo AssignStmt: s = s + a[i] * b[i];
     body = for_stmt.body
     if not isinstance(body, CompoundStmt):
         return None
@@ -188,7 +176,6 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     if not isinstance(stmt, AssignStmt):
         return None
 
-    # LHS: variabile scalare s
     if not isinstance(stmt.name, str):
         return None
     dest_name = stmt.name
@@ -197,16 +184,13 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     if not isinstance(rhs, BinaryOperator) or rhs.opcode != "+":
         return None
 
-    # lhs del '+' deve essere s
     if not isinstance(rhs.lhs, DeclRef) or rhs.lhs.name != dest_name:
         return None
 
-    # rhs del '+' deve essere un '*'
     mul = rhs.rhs
     if not isinstance(mul, BinaryOperator) or mul.opcode != "*":
         return None
 
-    # primo fattore: a[i]
     lhs_term = mul.lhs
     if not isinstance(lhs_term, ArrayAccess):
         return None
@@ -216,7 +200,6 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     if not isinstance(lhs_term.index, DeclRef) or lhs_term.index.name != idx_name:
         return None
 
-    # secondo fattore: b[i]
     rhs_term = mul.rhs
     if not isinstance(rhs_term, ArrayAccess):
         return None
@@ -241,8 +224,7 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
 
 def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     """
-    Riconosce il pattern:
-
+    Riconosce:
         for (int i = 0; i < M; i++) {
             for (int j = 0; j < N; j++) {
                 c[i][j] = 0;
@@ -252,8 +234,12 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
             }
         }
     """
+    # (Il tuo codice è già corretto: lo si mantiene invariato)
+    # --- INCOLLA QUI IL TUO BLOCCO MATMUL ESATTAMENTE COME LO HAI ---
+    # Nota: per brevità non lo riscrivo una seconda volta qui, ma nel file reale
+    # va mantenuto integralmente il tuo codice del matmul, senza modifiche.
 
-    # ----- for i -----
+    # >>>>> INIZIO (COPIA IL TUO BLOCCO ESISTENTE) <<<<<
     init_i = for_i.init
     if not isinstance(init_i, VarDecl):
         return None
@@ -270,7 +256,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         return None
     if not isinstance(cond_i.rhs, IntegerLiteral):
         return None
-    m = cond_i.rhs.value  # numero di righe
+    m = cond_i.rhs.value
 
     incr_i = for_i.increment
     if not isinstance(incr_i, AssignStmt):
@@ -287,7 +273,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(incr_i_expr.rhs, IntegerLiteral) or incr_i_expr.rhs.value != 1:
         return None
 
-    # body i: ci aspettiamo un solo ForStmt (for j)
     body_i = for_i.body
     if not isinstance(body_i, CompoundStmt):
         return None
@@ -297,7 +282,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(for_j, ForStmt):
         return None
 
-    # ----- for j -----
     init_j = for_j.init
     if not isinstance(init_j, VarDecl):
         return None
@@ -314,7 +298,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         return None
     if not isinstance(cond_j.rhs, IntegerLiteral):
         return None
-    n = cond_j.rhs.value  # numero di colonne
+    n = cond_j.rhs.value
 
     incr_j = for_j.increment
     if not isinstance(incr_j, AssignStmt):
@@ -331,7 +315,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(incr_j_expr.rhs, IntegerLiteral) or incr_j_expr.rhs.value != 1:
         return None
 
-    # body j: ci aspettiamo [ AssignStmt(c[i][j] = 0), ForStmt(k) ]
     body_j = for_j.body
     if not isinstance(body_j, CompoundStmt):
         return None
@@ -345,7 +328,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(for_k, ForStmt):
         return None
 
-    # c[i][j] = 0;
     lhs_zero = zero_stmt.name
     if not isinstance(lhs_zero, ArrayAccess):
         return None
@@ -354,7 +336,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     c_outer = lhs_zero.array
     if not isinstance(c_outer.array, DeclRef):
         return None
-    dest_name = c_outer.array.name  # "c"
+    dest_name = c_outer.array.name
     if not isinstance(c_outer.index, DeclRef) or c_outer.index.name != i_name:
         return None
     if not isinstance(lhs_zero.index, DeclRef) or lhs_zero.index.name != j_name:
@@ -362,7 +344,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(zero_stmt.value, IntegerLiteral) or zero_stmt.value.value != 0:
         return None
 
-    # ----- for k -----
     init_k = for_k.init
     if not isinstance(init_k, VarDecl):
         return None
@@ -379,7 +360,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         return None
     if not isinstance(cond_k.rhs, IntegerLiteral):
         return None
-    k_dim = cond_k.rhs.value  # dimensione interna
+    k_dim = cond_k.rhs.value
 
     incr_k = for_k.increment
     if not isinstance(incr_k, AssignStmt):
@@ -396,8 +377,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(incr_k_expr.rhs, IntegerLiteral) or incr_k_expr.rhs.value != 1:
         return None
 
-    # body k: un solo AssignStmt con accumulo:
-    # c[i][j] = c[i][j] + a[i][k] * b[k][j];
     body_k = for_k.body
     if not isinstance(body_k, CompoundStmt):
         return None
@@ -424,7 +403,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(rhs_update, BinaryOperator) or rhs_update.opcode != "+":
         return None
 
-    # lhs del '+' deve essere ancora c[i][j]
     lhs_sum = rhs_update.lhs
     if not isinstance(lhs_sum, ArrayAccess):
         return None
@@ -438,12 +416,10 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(lhs_sum.index, DeclRef) or lhs_sum.index.name != j_name:
         return None
 
-    # rhs del '+' deve essere un prodotto: a[i][k] * b[k][j]
     mul = rhs_update.rhs
     if not isinstance(mul, BinaryOperator) or mul.opcode != "*":
         return None
 
-    # a[i][k]
     a_term = mul.lhs
     if not isinstance(a_term, ArrayAccess):
         return None
@@ -452,13 +428,12 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     a_outer = a_term.array
     if not isinstance(a_outer.array, DeclRef):
         return None
-    lhs_name = a_outer.array.name  # "a"
+    lhs_name = a_outer.array.name
     if not isinstance(a_outer.index, DeclRef) or a_outer.index.name != i_name:
         return None
     if not isinstance(a_term.index, DeclRef) or a_term.index.name != k_name:
         return None
 
-    # b[k][j]
     b_term = mul.rhs
     if not isinstance(b_term, ArrayAccess):
         return None
@@ -467,7 +442,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     b_outer = b_term.array
     if not isinstance(b_outer.array, DeclRef):
         return None
-    rhs_name = b_outer.array.name  # "b"
+    rhs_name = b_outer.array.name
     if not isinstance(b_outer.index, DeclRef) or b_outer.index.name != k_name:
         return None
     if not isinstance(b_term.index, DeclRef) or b_term.index.name != j_name:
@@ -482,6 +457,8 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         k=k_dim,
         elem_bits=elem_bits,
     )
+    # >>>>> FINE (COPIA IL TUO BLOCCO ESISTENTE) <<<<<
+
 
 # =========================
 # Helper
@@ -492,27 +469,24 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
     Converte InitList in:
       - flat: lista piatta di int (row-major per matrici)
       - shape: (L,) per vettori oppure (rows, cols) per matrici
-
     Supporta:
       - {1,2,3}
       - {{1,2},{3,4}}
     """
     elems = init.elements
 
-    # Caso vuoto: {} (raro)
     if not elems:
         return [], (0,)
 
-    # Se il primo elemento è un InitList => assumiamo matrice (lista di righe)
     if isinstance(elems[0], InitList):
         rows = len(elems)
-        # tutte le righe devono essere InitList e avere stessa lunghezza
-        row_lengths = []
+        row_lengths: List[int] = []
         flat: List[int] = []
+
         for row in elems:
             if not isinstance(row, InitList):
                 raise ValueError("InitList misto: atteso tutte righe InitList per matrice.")
-            row_vals = []
+            row_vals: List[int] = []
             for cell in row.elements:
                 if not isinstance(cell, IntegerLiteral):
                     raise ValueError("InitList matrice: ammessi solo IntegerLiteral per ora.")
@@ -526,7 +500,6 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
         cols = row_lengths[0]
         return flat, (rows, cols)
 
-    # Altrimenti assumiamo vettore {1,2,3}
     flat: List[int] = []
     for e in elems:
         if not isinstance(e, IntegerLiteral):
@@ -542,19 +515,11 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
 
 def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
     """
-    Converte un TranslationUnit (dataclass C) in un VecMatModule
-    riconoscendo i pattern:
-    - matmul (triplo loop i,j,k)
-    - vec_add
-    - vec_dot
-
-    In più:
-    - raccoglie inizializzazioni costanti tipo:
-        int a = {1,2};
-        int A = {{1,2},{3,4}};
-      salvandole in module.const_arrays / module.const_shapes
+    Converte TranslationUnit in VecMatModule:
+    - riconosce vec_add, vec_dot, matmul
+    - raccoglie InitList dei VarDecl in:
+        module.const_arrays / module.const_shapes
     """
-
     module = VecMatModule()
 
     for func in tu.decls:
@@ -563,35 +528,32 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
 
         vec_func = VecMatFunction(name=func.name, params=list(func.params))
 
-        # --- PASS 0: raccogli InitList dai VarDecl ---
+        # PASS 0: raccogli InitList
         for stmt in func.body.stmts:
             if isinstance(stmt, VarDecl) and isinstance(stmt.init, InitList):
                 flat, shape = _extract_initlist_flat_and_shape(stmt.init)
+
+                # Se la stessa variabile è inizializzata più volte (caso raro), si sovrascrive.
                 module.const_arrays[stmt.name] = flat
                 module.const_shapes[stmt.name] = shape
 
-        # --- PASS 1: matching dei loop (come prima) ---
+        # PASS 1: matching dei loop
         for stmt in func.body.stmts:
             if isinstance(stmt, ForStmt):
-                # 1) prova matmul sul for esterno (i)
                 matmul_op = _match_matmul_for(stmt, elem_bits)
                 if matmul_op is not None:
                     vec_func.ops.append(matmul_op)
                     continue
 
-                # 2) prova vec_add
                 vec_add_op = _match_vec_add_for(stmt, elem_bits)
                 if vec_add_op is not None:
                     vec_func.ops.append(vec_add_op)
                     continue
 
-                # 3) prova vec_dot
                 vec_dot_op = _match_vec_dot_for(stmt, elem_bits)
                 if vec_dot_op is not None:
                     vec_func.ops.append(vec_dot_op)
                     continue
-
-                # altri for: non gestiti
 
         module.functions.append(vec_func)
 

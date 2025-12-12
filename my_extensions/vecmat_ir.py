@@ -1,7 +1,7 @@
 # my_extensions/vecmat_ir.py
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Union, Tuple
+from typing import List, Union, Tuple, Dict
 
 
 # =========================
@@ -72,28 +72,24 @@ class ScalarMulOp(VecMatOp):
 class VecAddOp(VecMatOp):
     """
     Somma di vettori: c[i] = a[i] + b[i] per i = 0..length-1.
-
-    a, b, c sono nomi di variabili/buffer logici.
     """
-    dest: str         # nome vettore risultato (es. "c")
-    lhs: str          # nome vettore a
-    rhs: str          # nome vettore b
-    length: int       # dimensione del vettore
-    elem_bits: int    # bitwidth dell'elemento
+    dest: str
+    lhs: str
+    rhs: str
+    length: int
+    elem_bits: int
 
 
 @dataclass
 class VecDotOp(VecMatOp):
     """
     Prodotto scalare: acc = Σ_{i=0..length-1} a[i] * b[i].
-
-    a, b sono vettori; acc è la variabile scalare risultato.
     """
-    dest: str         # nome scalare accumulatore (es. "s")
-    lhs: str          # nome vettore a
-    rhs: str          # nome vettore b
-    length: int       # dimensione del vettore
-    elem_bits: int    # bitwidth dell'elemento
+    dest: str
+    lhs: str
+    rhs: str
+    length: int
+    elem_bits: int
 
 
 @dataclass
@@ -102,15 +98,14 @@ class MatMulOp(VecMatOp):
     Moltiplicazione di matrici: C = A * B.
 
     A: M x K, B: K x N, C: M x N.
-    Le dimensioni sono esplicite per facilitare il mapping successivo.
     """
-    dest: str         # nome matrice risultato (es. "C")
-    lhs: str          # nome matrice A
-    rhs: str          # nome matrice B
-    m: int            # numero di righe di A e C
-    n: int            # numero di colonne di B e C
-    k: int            # dimensione interna (colonne A, righe B)
-    elem_bits: int    # bitwidth dell'elemento
+    dest: str
+    lhs: str
+    rhs: str
+    m: int
+    n: int
+    k: int
+    elem_bits: int
 
 
 # =========================
@@ -121,8 +116,6 @@ class MatMulOp(VecMatOp):
 class VecMatFunction:
     """
     Funzione nel dialetto vettoriale/matriciale.
-
-    Contiene il nome, la firma (parametri) e la lista di operazioni.
     """
     name: str
     params: List[str] = field(default_factory=list)
@@ -132,20 +125,21 @@ class VecMatFunction:
 @dataclass
 class VecMatModule:
     """
-    Modulo di alto livello per il dialetto intermedio.
+    Modulo di alto livello VecMat.
 
-    Contiene una lista di funzioni e (roba nuova) eventuali inizializzazioni costanti
-    estratte dal C per vettori/matrici.
+    Oltre alle funzioni, mantiene anche eventuali inizializzazioni costanti
+    lette dal C tramite InitList (vettori/matrici).
+
+    Convenzioni:
+      - const_shapes[name] == (L,)         -> vettore di lunghezza L
+      - const_shapes[name] == (R, C)       -> matrice RxC (row-major)
+      - const_arrays[name] è sempre "flat":
+            * vettore: L elementi
+            * matrice: R*C elementi in ordine riga (row-major)
+
+    Nota: per ora si assume supporto fino a 2D (vettori e matrici).
     """
     functions: List[VecMatFunction] = field(default_factory=list)
 
-    # NUOVO: valori costanti "reali" letti da InitListExpr del C
-    # - per vettori: flat list di lunghezza L
-    # - per matrici: flat list di lunghezza rows*cols (row-major)
-
-    const_arrays: dict[str, List[int]] = field(default_factory=dict)
-
-    # NUOVO: shape per distinguere vettore vs matrice
-    # - vettore: (L,)
-    # - matrice: (rows, cols)
-    const_shapes: dict[str, Tuple[int, ...]] = field(default_factory=dict)
+    const_arrays: Dict[str, List[int]] = field(default_factory=dict)
+    const_shapes: Dict[str, Tuple[int, ...]] = field(default_factory=dict)

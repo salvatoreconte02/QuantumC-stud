@@ -3,34 +3,34 @@
 """
 Lowering da QAR (QarModule) al quantum MLIR di QuantumC.
 
-ATTENZIONE: questo pass non "esegue" le operazioni numeriche su dati reali.
-Come QuantumC, costruisce SOLO la STRUTTURA del circuito quantistico:
+In questa versione:
+- inizializza vettori e matrici con valori REALI se disponibili in:
+    qar_module.const_arrays  +  qar_module.const_shapes
+- supporta anche inizializzazione "fallback" a 0 se non ci sono costanti
+- implementa lowering di:
+    * QarMapAdd  (vec add)
+    * QarDot     (vec dot)
+    * QarMatMul  (matmul)
 
-  - quante operazioni servono,
-  - come sono composte (pattern di add/mul),
-  - come cresce la complessità al variare di length, m, n, k.
-
-I registri inizializzati con QuantumInitOp(0) sono PLACEHOLDER:
-non rappresentano il valore 0 del programma C, ma slot quantistici
-su cui agiscono le primitive (addi, muli, ecc.).
-
-Rispetto alla versione precedente, qui facciamo anche una
-inizializzazione "simbolica" dei vettori/matrici:
-  - per ogni nome vettoriale (a, b, c, ...) creiamo una lista di registri,
-  - per ogni scalare (s, ...) creiamo un registro,
-e poi usiamo questi registri nelle op QAR (dot, map_add, ...).
+AGGIUNTA STRUTTURALE:
+- costruisce una mappa semantica result_map che collega:
+    ("C", i, j) -> SSAValue corrispondente a C[i][j]
+  e per i vettori:
+    ("c", i) -> SSAValue corrispondente a c[i]
+  e per gli scalari (dot):
+    ("acc",) -> SSAValue finale
+Questa mappa serve per rendere il "return" generale e corretto nel merge.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple, Any
 
-from xdsl.dialects.builtin import ModuleOp, i32, IntegerAttr
+from xdsl.dialects.builtin import ModuleOp, i32
 from xdsl.dialects.func import FuncOp
 from xdsl.ir import Block, Region, SSAValue
 
 from my_extensions.qar_ir import (
     QarModule,
-    QarFunction,
     QarMapAdd,
     QarDot,
     QarMatMul,
@@ -44,43 +44,63 @@ from step4_mlir_to_quantum_mlir.quantum_dialect import (
 
 
 # ---------------------------------------------------------------------------
-# Analisi del QarModule: raccolta info su vettori e scalari
+# Analisi del QarModule: raccolta info su vettori, matrici e scalari
 # ---------------------------------------------------------------------------
 
-def _collect_qaar_symbols(qar_module: QarModule) -> tuple[dict[str, tuple[int, int]], set[str]]:
+def _collect_symbols(
+    qar_module: QarModule,
+) -> tuple[dict[str, tuple[tuple[int, ...], int]], set[str]]:
     """
-    Scansiona il QarModule e raccoglie:
-      - vec_info: mappa nome -> (max_length, elem_bits) per vettori/matrici
-      - scalar_names: insieme di nomi scalari (es. 's' del dot)
+    Raccoglie:
+      - tensor_info: name -> (shape, elem_bits)
+            shape = (L,) per vettori
+            shape = (rows, cols) per matrici
+      - scalar_names: nomi scalari (es. 'acc' in dot)
     """
-    vec_info: dict[str, tuple[int, int]] = {}
+    tensor_info: dict[str, tuple[tuple[int, ...], int]] = {}
     scalar_names: set[str] = set()
+
+    def _numel(shape: tuple[int, ...]) -> int:
+        t = 1
+        for d in shape:
+            t *= d
+        return t
+
+    def _update(name: str, shape: tuple[int, ...], elem_bits: int):
+        old = tensor_info.get(name)
+        if old is None:
+            tensor_info[name] = (shape, elem_bits)
+            return
+
+        old_shape, _old_bits = old
+
+        # Se la "dimensione" (rank) è diversa, non risolvibile qui:
+        if len(shape) != len(old_shape):
+            return
+
+        # Stesso rank: tenere la shape con più elementi (se capita).
+        if _numel(shape) > _numel(old_shape):
+            tensor_info[name] = (shape, elem_bits)
 
     for fn in qar_module.functions:
         for op in fn.ops:
             if isinstance(op, QarMapAdd):
-                # dest, lhs, rhs sono vettori
+                shp = (op.length,)
                 for name in (op.dest, op.lhs, op.rhs):
-                    old = vec_info.get(name)
-                    L = op.length
-                    if old is None or L > old[0]:
-                        vec_info[name] = (L, op.elem_bits)
+                    _update(name, shp, op.elem_bits)
 
             elif isinstance(op, QarDot):
-                # dest è scalare, lhs/rhs sono vettori
                 scalar_names.add(op.dest)
+                shp = (op.length,)
                 for name in (op.lhs, op.rhs):
-                    old = vec_info.get(name)
-                    L = op.length
-                    if old is None or L > old[0]:
-                        vec_info[name] = (L, op.elem_bits)
+                    _update(name, shp, op.elem_bits)
 
             elif isinstance(op, QarMatMul):
-                # In futuro puoi usare qui info su matrici
-                # per esempio memorizzare dimensioni, ecc.
-                pass
+                _update(op.lhs, (op.m, op.k), op.elem_bits)
+                _update(op.rhs, (op.k, op.n), op.elem_bits)
+                _update(op.dest, (op.m, op.n), op.elem_bits)
 
-    return vec_info, scalar_names
+    return tensor_info, scalar_names
 
 
 # ---------------------------------------------------------------------------
@@ -89,103 +109,98 @@ def _collect_qaar_symbols(qar_module: QarModule) -> tuple[dict[str, tuple[int, i
 
 def from_qar_to_quantum_mlir(qar_module: QarModule, num_bits: int = 16) -> ModuleOp:
     """
-    Entry point usato dalla pipeline:
+    QarModule -> ModuleOp (quantum dialect)
 
-        QarModule  ->  ModuleOp (quantum dialect)
+    Inizializza registri anche quando non ci sono macro-op QAR:
+    usa const_shapes/const_arrays per costruire tensor_info.
 
-    Costruisce un ModuleOp con dentro una funzione @main che:
-      - in un prologo inizializza i registri per tutti i vettori e scalari QAR,
-      - poi emette le operazioni quantistiche corrispondenti a QarDot, QarMapAdd, ecc.
-
-    Il parametro num_bits è mantenuto per coerenza con il resto della pipeline,
-    ma al momento non viene usato in questo pass.
+    NOTA: viene aggiunto module.result_map come side-table del compilatore.
     """
+    tensor_info, scalar_names = _collect_symbols(qar_module)
 
-    # 1) Raccogli informazioni su vettori e scalari usati nel QarModule
-    vec_info, scalar_names = _collect_qaar_symbols(qar_module)
+    const_arrays = getattr(qar_module, "const_arrays", {}) or {}
+    const_shapes = getattr(qar_module, "const_shapes", {}) or {}
 
-    # 2) Crea il ModuleOp esterno
+    for name in set(const_arrays.keys()) | set(const_shapes.keys()):
+        if name in tensor_info:
+            continue
+        if name in const_shapes:
+            tensor_info[name] = (tuple(const_shapes[name]), num_bits)
+        elif name in const_arrays:
+            tensor_info[name] = ((len(const_arrays[name]),), num_bits)
+
     module = ModuleOp([])
 
-    # 3) Crea la funzione @main senza argomenti.
-    #    Tipo semplificato: ([], []) perché qui non imponiamo un tipo di ritorno;
-    #    il backend guarda solo le operazioni nel blocco.
+    # Side-table per collegare elementi (vec/mat) ai rispettivi SSAValue finali.
+    # Chiave:
+    #   - vettore: (name, i)
+    #   - matrice: (name, i, j)
+    #   - scalare: (name,)
+    module.result_map: Dict[Tuple[Any, ...], SSAValue] = {}
+
     entry_block = Block()
     func_region = Region([entry_block])
     func_type = ([], [])
     func = FuncOp("main", func_type, func_region)
-
-    # Inserisci la func nel modulo
     module.body.blocks[0].add_op(func)
 
-    # 4) Ambienti per vettori e scalari
-    vec_env: Dict[str, List[SSAValue]] = {}
+    tensor_env: Dict[str, List[SSAValue]] = {}
     scalar_env: Dict[str, SSAValue] = {}
 
-    # 5) PROLOGO: inizializza i registri quantistici per vettori e scalari
-    _emit_vector_and_scalar_inits(
+    _emit_tensor_and_scalar_inits(
         entry_block,
-        vec_info,
+        tensor_info,
         scalar_names,
-        vec_env,
+        tensor_env,
         scalar_env,
         qar_module,
     )
 
-    # 6) Emissione delle operazioni QAR come quantum ops
-    _emit_qar_ops(entry_block, qar_module, vec_env, scalar_env)
-
-    # NOTA: qui NON aggiungiamo ReturnOp.
-    #  - Nel caso ibrido, il ReturnOp viene dal percorso scalare e
-    #    la merge-pipeline lo gestisce.
-    #  - Nel caso puramente vettoriale, il QASM rappresenta solo lo
-    #    schema di operazioni (nessuna misura obbligatoria).
+    _emit_qar_ops(entry_block, qar_module, tensor_env, scalar_env, module.result_map)
 
     return module
 
 
 # ---------------------------------------------------------------------------
-# PROLOGO: inizializzazione dei registri per vettori e scalari
+# PROLOGO: inizializzazione registri per tensori (vettori/matrici) e scalari
 # ---------------------------------------------------------------------------
 
-def _emit_vector_and_scalar_inits(
+def _emit_tensor_and_scalar_inits(
     block: Block,
-    vec_info: dict[str, tuple[int, int]],
+    tensor_info: dict[str, tuple[tuple[int, ...], int]],
     scalar_names: set[str],
-    vec_env: dict[str, list[SSAValue]],
+    tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
     qar_module: QarModule,
 ):
     const_arrays = getattr(qar_module, "const_arrays", {}) or {}
     const_shapes = getattr(qar_module, "const_shapes", {}) or {}
 
-    # Vettori / matrici (flatten)
-    for name, (length, elem_bits) in vec_info.items():
-        regs: list[SSAValue] = []
+    def _numel(shape: tuple[int, ...]) -> int:
+        t = 1
+        for d in shape:
+            t *= d
+        return t
+
+    for name, (inferred_shape, _bits) in tensor_info.items():
+        shape = const_shapes.get(name, inferred_shape)
+
+        if len(shape) not in (1, 2):
+            raise ValueError(f"Shape non supportata per '{name}': {shape}")
+
+        total = _numel(shape)
         init_vals = const_arrays.get(name)
 
-        # se c'è shape, usa quello per il numero di elementi
-        shape = const_shapes.get(name)
-        total = length
-        if shape is not None:
-            total = 1
-            for d in shape:
-                total *= d
-
+        regs: list[SSAValue] = []
         for idx in range(total):
-            if init_vals is not None and idx < len(init_vals):
-                v = int(init_vals[idx])
-            else:
-                v = 0
-
+            v = int(init_vals[idx]) if (init_vals is not None and idx < len(init_vals)) else 0
             init_op = QuantumInitOp(v, i32)
             block.add_op(init_op)
             init_op.results[0].name_hint = f"q_{name}_{idx}"
             regs.append(init_op.results[0])
 
-        vec_env[name] = regs
+        tensor_env[name] = regs
 
-    # Scalari
     for name in scalar_names:
         init_op = QuantumInitOp(0, i32)
         block.add_op(init_op)
@@ -193,95 +208,109 @@ def _emit_vector_and_scalar_inits(
         scalar_env[name] = init_op.results[0]
 
 
-
-
 # ---------------------------------------------------------------------------
-# Lowering delle op QAR in operazioni del quantum dialect
+# Lowering delle op QAR in operazioni quantum.*
 # ---------------------------------------------------------------------------
 
 def _emit_qar_ops(
     block: Block,
     qar_module: QarModule,
-    vec_env: dict[str, list[SSAValue]],
+    tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
+    result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
-    """
-    Per ogni op QAR genera la corrispondente sequenza di operazioni
-    nel dialetto quantistico, riusando i registri di vec_env/scalar_env.
-    """
     for fn in qar_module.functions:
         for op in fn.ops:
             if isinstance(op, QarMapAdd):
-                _lower_vec_add(block, op, vec_env)
+                _lower_vec_add(block, op, tensor_env, result_map)
             elif isinstance(op, QarDot):
-                _lower_vec_dot(block, op, vec_env, scalar_env)
+                _lower_vec_dot(block, op, tensor_env, scalar_env, result_map)
             elif isinstance(op, QarMatMul):
-                # TODO: in futuro puoi implementare qui anche il matmul
-                pass
+                _lower_matmul(block, op, tensor_env, result_map)
             else:
-                # se in futuro aggiungi altre op QAR, gestiscile qui
                 pass
 
 
 def _lower_vec_add(
     block: Block,
     op: QarMapAdd,
-    vec_env: dict[str, list[SSAValue]],
+    tensor_env: dict[str, list[SSAValue]],
+    result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
-    """
-    QarMapAdd(dest, lhs, rhs, length, elem_bits)
-    implementata come:
-        dest[i] = lhs[i] + rhs[i]
-    usando QAddiOp per ogni elemento.
-    """
-    dest_regs = vec_env[op.dest]
-    lhs_regs = vec_env[op.lhs]
-    rhs_regs = vec_env[op.rhs]
+    dest_regs = tensor_env[op.dest]
+    lhs_regs = tensor_env[op.lhs]
+    rhs_regs = tensor_env[op.rhs]
 
     for i in range(op.length):
-        lhs_q = lhs_regs[i]
-        rhs_q = rhs_regs[i]
-
-        # QAddiOp(lhs, rhs) come definito nel quantum_dialect
-        add_op = QAddiOp(lhs_q, rhs_q)
+        add_op = QAddiOp(lhs_regs[i], rhs_regs[i])
         block.add_op(add_op)
-
-        # aggiorna il registro di destinazione per questo elemento
         dest_regs[i] = add_op.results[0]
+
+        # registra c[i] -> SSAValue
+        result_map[(op.dest, i)] = dest_regs[i]
 
 
 def _lower_vec_dot(
     block: Block,
     op: QarDot,
-    vec_env: dict[str, list[SSAValue]],
+    tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
+    result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
-    """
-    QarDot(dest='s', lhs='a', rhs='b', length, elem_bits)
-    implementata come:
-        s = 0 (già inizializzato nel prologo)
-        per i in [0, length):
-            tmp = a[i] * b[i]
-            s   = s + tmp
-    """
-    a_regs = vec_env[op.lhs]
-    b_regs = vec_env[op.rhs]
-
+    a_regs = tensor_env[op.lhs]
+    b_regs = tensor_env[op.rhs]
     acc = scalar_env[op.dest]
 
     for i in range(op.length):
-        lhs_q = a_regs[i]
-        rhs_q = b_regs[i]
-
-        # 1) moltiplicazione: tmp = a[i] * b[i]
-        mul_op = QMuliOp(lhs_q, rhs_q)
+        mul_op = QMuliOp(a_regs[i], b_regs[i])
         block.add_op(mul_op)
-        tmp_q = mul_op.results[0]
 
-        # 2) accumulo: acc = acc + tmp
-        add_op = QAddiOp(acc, tmp_q)
+        add_op = QAddiOp(acc, mul_op.results[0])
         block.add_op(add_op)
         acc = add_op.results[0]
 
-    # aggiorna l'env, così se in futuro s viene riusato, hai l'ultima versione
     scalar_env[op.dest] = acc
+    result_map[(op.dest,)] = acc  # scalare finale
+
+
+def _lower_matmul(
+    block: Block,
+    op: QarMatMul,
+    tensor_env: dict[str, list[SSAValue]],
+    result_map: Dict[Tuple[Any, ...], SSAValue],
+):
+    """
+    C = A * B
+    A: (m,k) row-major flatten
+    B: (k,n) row-major flatten
+    C: (m,n) row-major flatten
+
+    C[i,j] = sum_{kk=0..k-1} A[i,kk] * B[kk,j]
+    """
+    A = tensor_env[op.lhs]
+    B = tensor_env[op.rhs]
+    C = tensor_env[op.dest]
+
+    m, n, k = op.m, op.n, op.k
+
+    def idx(row: int, col: int, ncols: int) -> int:
+        return row * ncols + col
+
+    for i in range(m):
+        for j in range(n):
+            acc = C[idx(i, j, n)]
+            for kk in range(k):
+                a_ik = A[idx(i, kk, k)]
+                b_kj = B[idx(kk, j, n)]
+
+                mul_op = QMuliOp(a_ik, b_kj)
+                block.add_op(mul_op)
+
+                add_op = QAddiOp(acc, mul_op.results[0])
+                block.add_op(add_op)
+                acc = add_op.results[0]
+
+            C[idx(i, j, n)] = acc
+
+            # registra C[i][j] -> SSAValue (semantica preservata)
+            result_map[(op.dest, i, j)] = acc
