@@ -1,7 +1,7 @@
 # my_extensions/vecmat_ir.py
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 
 # =========================
@@ -134,6 +134,18 @@ class VecMatModule:
     """
     Modulo di alto livello per il dialetto intermedio.
 
-    Contiene una lista di funzioni.
+    Contiene una lista di funzioni e (roba nuova) eventuali inizializzazioni costanti
+    estratte dal C per vettori/matrici.
     """
     functions: List[VecMatFunction] = field(default_factory=list)
+
+    # NUOVO: valori costanti "reali" letti da InitListExpr del C
+    # - per vettori: flat list di lunghezza L
+    # - per matrici: flat list di lunghezza rows*cols (row-major)
+
+    const_arrays: dict[str, List[int]] = field(default_factory=dict)
+
+    # NUOVO: shape per distinguere vettore vs matrice
+    # - vettore: (L,)
+    # - matrice: (rows, cols)
+    const_shapes: dict[str, Tuple[int, ...]] = field(default_factory=dict)

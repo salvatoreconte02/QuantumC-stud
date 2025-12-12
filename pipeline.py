@@ -63,88 +63,92 @@ def save_module(module: ModuleOp, path: str) -> None:
         Printer(stream=f).print_op(module)
 
 
-from xdsl.dialects.func import FuncOp, ReturnOp  # assicurarsi che sia presente in testa al file
-from xdsl.ir import Block
-from xdsl.dialects.builtin import ModuleOp
+from xdsl.ir import Operation, SSAValue
+from xdsl.dialects.func import FuncOp, ReturnOp
+from step4_mlir_to_quantum_mlir.quantum_dialect import QuantumInitOp
 
 def _merge_scalar_and_vec_quantum(
     scalar_quantum_module: ModuleOp,
     vec_quantum_module: ModuleOp,
 ) -> ModuleOp:
-    """
-    Fonde il modulo quantistico scalare generato da QuantumC con quello
-    vettoriale/matriciale generato dal nostro pass QAR → quantum.
 
-    Strategia:
-    - per ogni funzione con lo stesso nome,
-      * si prendono tutte le op del corpo vettoriale,
-      * si separano le QuantumInitOp dalle altre,
-      * si clona tutto e si inserisce nel corpo scalare,
-        prima dell'eventuale ReturnOp, con l'ordine:
-          1) tutte le QuantumInitOp,
-          2) tutte le altre op (QAddiOp, QMuliOp, ...).
-
-    In questo modo, il backend step5 vede sempre i quantum.init
-    prima delle operazioni che li usano.
-    """
-
-    scalar_block: Block = scalar_quantum_module.body.blocks[0]
-    vec_block: Block = vec_quantum_module.body.blocks[0]
+    scalar_top: Block = scalar_quantum_module.body.blocks[0]
+    vec_top: Block = vec_quantum_module.body.blocks[0]
 
     # nome funzione -> FuncOp nel modulo scalare
-    scalar_funcs: dict[str, FuncOp] = {}
-    for op in scalar_block.ops:
-        if isinstance(op, FuncOp):
-            scalar_funcs[op.sym_name.data] = op
+    scalar_funcs: dict[str, FuncOp] = {
+        op.sym_name.data: op for op in scalar_top.ops if isinstance(op, FuncOp)
+    }
 
     # per ogni funzione vettoriale
-    for op in vec_block.ops:
-        if not isinstance(op, FuncOp):
+    for vec_func in vec_top.ops:
+        if not isinstance(vec_func, FuncOp):
             continue
 
-        fname = op.sym_name.data
+        fname = vec_func.sym_name.data
         if fname not in scalar_funcs:
-            # per ora ignoriamo eventuali funzioni "solo vettoriali"
             continue
 
         scalar_func = scalar_funcs[fname]
-        scalar_body_block: Block = scalar_func.body.blocks[0]
-        vec_body_block: Block = op.body.blocks[0]
+        scalar_body: Block = scalar_func.body.blocks[0]
+        vec_body: Block = vec_func.body.blocks[0]
 
-        # cerca eventuale ReturnOp nel blocco scalare
-        last_ret: ReturnOp | None = None
-        for s_op in scalar_body_block.ops:
-            if isinstance(s_op, ReturnOp):
-                last_ret = s_op
+        # trova ReturnOp scalare (anchor)
+        anchor: Operation | None = None
+        for op in scalar_body.ops:
+            if isinstance(op, ReturnOp):
+                anchor = op
+                break
+        if anchor is None:
+            # se non c'è return, inseriamo in coda
+            # (ma di solito main scalare ha return)
+            anchor = None
 
-        # separa init e altre op nel corpo vettoriale
-        init_ops = []
-        other_ops = []
-        for vop in vec_body_block.ops:
-            if isinstance(vop, QuantumInitOp):
-                init_ops.append(vop)
+        # 1) separa init e altre op dal vec body (ignorando ReturnOp)
+        vec_inits: list[Operation] = []
+        vec_others: list[Operation] = []
+        for op in vec_body.ops:
+            if isinstance(op, ReturnOp):
+                continue
+            if isinstance(op, QuantumInitOp):
+                vec_inits.append(op)
             else:
-                other_ops.append(vop)
+                vec_others.append(op)
 
-        def insert_before(anchor: Operation, ops_to_insert: list[Operation]):
-            """
-            Inserisce le operazioni clonate prima di 'anchor' nello stesso ordine
-            in cui compaiono in ops_to_insert.
-            """
-            # per preservare l'ordine, si inserisce in reverse
-            for vop in reversed(ops_to_insert):
-                cloned = vop.clone()
-                scalar_body_block.insert_op_before(cloned, anchor)
+        # 2) SSA remap: vec SSA -> new SSA (dopo inserimento nel blocco scalare)
+        ssa_map: dict[SSAValue, SSAValue] = {}
 
-        if last_ret is not None:
-            # inserisce prima tutti i quantum.init, poi le altre op, prima del return
-            insert_before(last_ret, init_ops)
-            insert_before(last_ret, other_ops)
-        else:
-            # nessun return: aggiunge semplicemente in coda al blocco
-            for vop in init_ops + other_ops:
-                cloned = vop.clone()
-                scalar_body_block.add_op(cloned)
+        def insert_op(op: Operation):
+            if anchor is None:
+                scalar_body.add_op(op)
+            else:
+                scalar_body.insert_op_before(op, anchor)
+
+        # 3) inserisci init e costruisci mapping sui risultati
+        for init_op in vec_inits:
+            new_init = init_op.clone()
+            insert_op(new_init)
+            # mappa risultato 0 (quantum.init ha un solo result)
+            ssa_map[init_op.results[0]] = new_init.results[0]
+
+        # helper: rimappa un SSAValue se presente in ssa_map
+        def remap(v: SSAValue) -> SSAValue:
+            return ssa_map.get(v, v)
+
+        # 4) inserisci le altre op con ricablaggio
+        for op in vec_others:
+            new_op = op.clone()
+
+            # ricablaggio degli operandi
+            # (xdsl: Operation.operands è una lista modificabile)
+            new_operands = [remap(o) for o in new_op.operands]
+            new_op.operands = new_operands
+
+            insert_op(new_op)
+
+            # aggiorna mapping anche per i risultati prodotti (catena add/mul)
+            for old_res, new_res in zip(op.results, new_op.results):
+                ssa_map[old_res] = new_res
 
     return scalar_quantum_module
 
@@ -190,6 +194,9 @@ def compile_c_file(
         qar_module = from_vecmat_to_qar(vecmat_module)
         print("=== QarModule (dialetto QAR) ===")
         pprint(qar_module)
+
+        print("QAR const_arrays:", getattr(qar_module, "const_arrays", None))
+        print("QAR const_shapes:", getattr(qar_module, "const_shapes", None))
 
         vec_quantum_module = from_qar_to_quantum_mlir(qar_module, num_bits=num_bits)
         vec_quantum_path = os.path.join(QMLIR_DIR, f"{base}_quantum_vec.mlir")

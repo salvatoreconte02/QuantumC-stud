@@ -1,6 +1,6 @@
 # my_extensions/vecmat_lowering.py
 
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 
 from step2_ast_to_dataclasses.c_ast import (
     TranslationUnit,
@@ -14,7 +14,9 @@ from step2_ast_to_dataclasses.c_ast import (
     BinaryOperator,
     BinaryOperatorWithImmediate,
     ArrayAccess,
+    InitList,          # NUOVO
 )
+
 from my_extensions.vecmat_ir import (
     VecMatModule,
     VecMatFunction,
@@ -481,6 +483,58 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         elem_bits=elem_bits,
     )
 
+# =========================
+# Helper
+# =========================
+
+def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[int, ...]]:
+    """
+    Converte InitList in:
+      - flat: lista piatta di int (row-major per matrici)
+      - shape: (L,) per vettori oppure (rows, cols) per matrici
+
+    Supporta:
+      - {1,2,3}
+      - {{1,2},{3,4}}
+    """
+    elems = init.elements
+
+    # Caso vuoto: {} (raro)
+    if not elems:
+        return [], (0,)
+
+    # Se il primo elemento è un InitList => assumiamo matrice (lista di righe)
+    if isinstance(elems[0], InitList):
+        rows = len(elems)
+        # tutte le righe devono essere InitList e avere stessa lunghezza
+        row_lengths = []
+        flat: List[int] = []
+        for row in elems:
+            if not isinstance(row, InitList):
+                raise ValueError("InitList misto: atteso tutte righe InitList per matrice.")
+            row_vals = []
+            for cell in row.elements:
+                if not isinstance(cell, IntegerLiteral):
+                    raise ValueError("InitList matrice: ammessi solo IntegerLiteral per ora.")
+                row_vals.append(cell.value)
+            row_lengths.append(len(row_vals))
+            flat.extend(row_vals)
+
+        if len(set(row_lengths)) != 1:
+            raise ValueError(f"InitList matrice non rettangolare: row lengths = {row_lengths}")
+
+        cols = row_lengths[0]
+        return flat, (rows, cols)
+
+    # Altrimenti assumiamo vettore {1,2,3}
+    flat: List[int] = []
+    for e in elems:
+        if not isinstance(e, IntegerLiteral):
+            raise ValueError("InitList vettore: ammessi solo IntegerLiteral per ora.")
+        flat.append(e.value)
+
+    return flat, (len(flat),)
+
 
 # =========================
 # Conversione generale
@@ -493,6 +547,12 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
     - matmul (triplo loop i,j,k)
     - vec_add
     - vec_dot
+
+    In più:
+    - raccoglie inizializzazioni costanti tipo:
+        int a = {1,2};
+        int A = {{1,2},{3,4}};
+      salvandole in module.const_arrays / module.const_shapes
     """
 
     module = VecMatModule()
@@ -503,6 +563,14 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
 
         vec_func = VecMatFunction(name=func.name, params=list(func.params))
 
+        # --- PASS 0: raccogli InitList dai VarDecl ---
+        for stmt in func.body.stmts:
+            if isinstance(stmt, VarDecl) and isinstance(stmt.init, InitList):
+                flat, shape = _extract_initlist_flat_and_shape(stmt.init)
+                module.const_arrays[stmt.name] = flat
+                module.const_shapes[stmt.name] = shape
+
+        # --- PASS 1: matching dei loop (come prima) ---
         for stmt in func.body.stmts:
             if isinstance(stmt, ForStmt):
                 # 1) prova matmul sul for esterno (i)
@@ -523,7 +591,7 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
                     vec_func.ops.append(vec_dot_op)
                     continue
 
-                # altri for: non gestiti per ora
+                # altri for: non gestiti
 
         module.functions.append(vec_func)
 

@@ -1,6 +1,6 @@
 # my_extensions/vecmat_to_qar.py
 
-from my_extensions.vecmat_ir import VecMatModule, VecMatFunction, VecAddOp, VecDotOp, MatMulOp
+from my_extensions.vecmat_ir import VecMatModule, VecAddOp, VecDotOp, MatMulOp
 from my_extensions.qar_ir import QarModule, QarFunction, QarMapAdd, QarDot, QarMatMul
 
 
@@ -9,8 +9,16 @@ def from_vecmat_to_qar(vm_module: VecMatModule) -> QarModule:
     Converte un VecMatModule nel dialetto QAR, mappando
     1:1 le macro-operazioni vettoriali/matriciali in
     macro-operazioni di aritmetica quantistica.
+
+    Inoltre PROPAGA:
+      - const_arrays (valori costanti estratti da InitList)
+      - const_shapes (shape: (L,) o (rows, cols))
     """
     qar_mod = QarModule()
+
+    # --- NEW: copia inizializzazioni costanti ---
+    qar_mod.const_arrays = dict(getattr(vm_module, "const_arrays", {}))
+    qar_mod.const_shapes = dict(getattr(vm_module, "const_shapes", {}))
 
     for func in vm_module.functions:
         qar_func = QarFunction(name=func.name)
@@ -49,7 +57,6 @@ def from_vecmat_to_qar(vm_module: VecMatModule) -> QarModule:
                     )
                 )
             else:
-                # Altre operazioni VecMat non sono gestite per ora.
                 pass
 
         qar_mod.functions.append(qar_func)

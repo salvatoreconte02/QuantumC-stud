@@ -19,7 +19,8 @@ from step2_ast_to_dataclasses.c_ast import (
     IfStmt,
     ForStmt,
     ArrayAccess,
-)
+    InitList,
+    )
 
 MAX_UNROLL = 10
 
@@ -158,14 +159,32 @@ class MLIRGenerator:
         """
         Abbassa una dichiarazione di variabile scalare.
         Se non ha init, per semplicità si inizializza a 0.
+
+        Caso speciale: InitList (es. int a[2] = {1,2};)
+        Nel backend SCALARE non modelliamo gli array, quindi qui
+        inizializziamo semplicemente a 0. I valori reali sono usati
+        solo dal percorso vettoriale (VecMat/QAR).
         """
-        if stmt.init is not None:
+        # Caso speciale: inizializzazione con lista (InitListExpr nel C)
+        if isinstance(stmt.init, InitList):
+            const0 = ConstantOp.from_int_and_width(0, 32)
+            self.current_block.add_op(const0)
+            val = const0.results[0]
+
+        # Caso classico: inizializzazione scalare (IntegerLiteral, BinaryOperator, ...)
+        elif stmt.init is not None:
             val = self.process_expression(stmt.init)
+
+        # Nessuna inizializzazione esplicita → default = 0
         else:
             const0 = ConstantOp.from_int_and_width(0, 32)
             self.current_block.add_op(const0)
             val = const0.results[0]
+
+        # In tutti i casi, a questo punto 'val' è definito
         self.symbol_table[stmt.name] = val
+
+
 
     def lower_assign(self, stmt: AssignStmt) -> None:
         """

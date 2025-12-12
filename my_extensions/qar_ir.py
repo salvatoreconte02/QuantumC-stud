@@ -47,4 +47,6 @@ class QarFunction:
 
 @dataclass
 class QarModule:
-    functions: List[QarFunction] = field(default_factory=list)
+    functions: list[QarFunction] = field(default_factory=list)
+    const_arrays: dict[str, list[int]] = field(default_factory=dict)      # NUOVO
+    const_shapes: dict[str, tuple[int, ...]] = field(default_factory=dict)   # NUOVO

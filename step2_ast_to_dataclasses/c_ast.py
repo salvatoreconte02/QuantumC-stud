@@ -130,6 +130,11 @@ class ForStmt:
     increment: Optional[AssignStmt]
     body: CompoundStmt
     
+@dataclass
+class InitList(Expression):
+    elements: list[Expression]
+
+
 
 
 
@@ -190,6 +195,13 @@ def parse_expression(expr: Dict) -> Expression:
         base_expr = parse_expression(inner[0])   # es. DeclRef("c")
         index_expr = parse_expression(inner[1])  # es. DeclRef("i") o BinaryOperator(...)
         return ArrayAccess(base_expr, index_expr)
+    
+    elif kind == "InitListExpr":
+        elems = []
+        for child in expr.get("inner", []):
+            elems.append(parse_expression(child))
+        return InitList(elems)
+
 
     else:
         raise ValueError(f"Unsupported expression node: {kind}")
@@ -254,8 +266,19 @@ def parse_statement(stmt: Dict) -> Optional[Union[VarDecl, AssignStmt, ReturnStm
         for var_decl in stmt.get("inner", []):
             if var_decl.get("kind") == "VarDecl":
                 init_expr = None
-                if "inner" in var_decl and var_decl["inner"]:
-                    init_expr = parse_expression(var_decl["inner"][0])
+                inner = var_decl.get("inner", [])
+
+                if inner:
+                    init_node = inner[0]
+                    init_kind = init_node.get("kind")
+
+                    if init_kind == "InitListExpr":
+                        # Ora lo parse-iamo davvero:
+                        init_expr = init_expr = parse_expression(init_node)
+                    else:
+                        # Caso scalare normale (IntegerLiteral, BinaryOperator, ecc.)
+                        init_expr = parse_expression(init_node)
+
                 decls.append(VarDecl(var_decl["name"], init_expr))
         return decls  # restituisce lista di VarDecl
 
@@ -350,6 +373,7 @@ def parse_statement(stmt: Dict) -> Optional[Union[VarDecl, AssignStmt, ReturnStm
         return ForStmt(init_stmt, condition_expr, increment_stmt, body)
 
     return None
+
 
 
 
@@ -478,5 +502,14 @@ def pretty_print_expression(expr: Expression) -> str:
         lhs = pretty_print_expression(expr.lhs)
         rhs = pretty_print_expression(expr.rhs)
         return f"({lhs} {expr.opcode} {rhs})"
+    # Accesso ad array: c[i]
+    if isinstance(expr, ArrayAccess):
+        base = pretty_print_expression(expr.array)
+        idx = pretty_print_expression(expr.index)
+        return f"{base}[{idx}]"
+    # Lista di inizializzazione: {1, 2, 3}
+    if isinstance(expr, InitList):
+        elems = ", ".join(pretty_print_expression(e) for e in expr.elements)
+        return "{" + elems + "}"
     return "<unsupported_expr>"
 
