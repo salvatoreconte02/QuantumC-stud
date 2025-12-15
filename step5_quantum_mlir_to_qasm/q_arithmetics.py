@@ -12,6 +12,27 @@ except Exception:  # pragma: no cover - optional dependency
 
 NUMBER_OF_BITS = 4
 
+# -----------------------------------------------------------------------------
+# Arithmetic backend selection (QFT vs Ripple)
+# -----------------------------------------------------------------------------
+# Default: keep existing behavior (QFT-based).
+ARITHMETIC_MODE = "qft"  # "qft" | "ripple"
+
+
+def set_arithmetic_mode(mode: str) -> None:
+    """
+    Select which arithmetic backend to use.
+
+    Args:
+        mode (str): "qft" or "ripple"
+    """
+    global ARITHMETIC_MODE
+    mode = (mode or "").strip().lower()
+    if mode not in ("qft", "ripple"):
+        raise ValueError("Invalid arithmetic mode. Use 'qft' or 'ripple'.")
+    ARITHMETIC_MODE = mode
+
+
 def unique_reg_name(existing_names, base):
     """
     Generate a unique register name not in existing_names starting from base.
@@ -26,7 +47,7 @@ def set_number_of_bits(n):
     """
     Set the number of bits for two's complement representation.
     This function should be called before any other operations.
-    
+
     Args:
         n (int): The number of bits to use for two's complement representation.
     """
@@ -44,6 +65,7 @@ def int_to_twos_complement(value):
     if value < 0:
         value = (1 << NUMBER_OF_BITS) + value
     return [(value >> i) & 1 for i in range(NUMBER_OF_BITS)]
+
 
 def initialize_variable(qc, value, register_name=None):
     """
@@ -89,7 +111,86 @@ def initialize_variable(qc, value, register_name=None):
 
     return new_qreg
 
-def add_in_place(qc, a_reg, b_reg):
+
+# -----------------------------------------------------------------------------
+# Ripple-carry (CDKM/Cuccaro-style) helper: in-place target += addend (mod 2^n)
+# - Uses 1 ancilla carry qubit.
+# - Leaves addend unchanged.
+# -----------------------------------------------------------------------------
+
+def _ripple_majority(qc: QuantumCircuit, a, b, c) -> None:
+    # Standard Cuccaro majority
+    qc.cx(c, b)
+    qc.cx(c, a)
+    qc.ccx(a, b, c)
+
+
+def _ripple_unmajority(qc: QuantumCircuit, a, b, c) -> None:
+    # Standard Cuccaro unmajority
+    qc.ccx(a, b, c)
+    qc.cx(c, a)
+    qc.cx(a, b)
+
+
+def _ripple_add_in_place(qc: QuantumCircuit, target_reg: QuantumRegister, addend_reg: QuantumRegister) -> QuantumRegister:
+    """
+    In-place ripple-carry addition (two's complement modulo 2^n):
+        target_reg := target_reg + addend_reg
+    using one carry ancilla, leaving addend_reg unchanged.
+
+    Note: This is intended for benchmarking/comparison, not for aggressive optimization.
+    """
+    n = len(target_reg)
+    if len(addend_reg) != n:
+        raise ValueError("Ripple add requires registers of same length.")
+
+    existing = {reg.name for reg in qc.qregs}
+    carry_name = unique_reg_name(existing, "carry")
+    carry = QuantumRegister(1, name=carry_name)
+    qc.add_register(carry)
+
+    # To place the sum into target_reg while leaving addend_reg unchanged:
+    # run Cuccaro where the sum ends in the second register (b).
+    # We set: a = addend_reg (preserved), b = target_reg (updated).
+    c = carry[0]
+    for i in range(n):
+        _ripple_majority(qc, addend_reg[i], target_reg[i], c)
+
+    for i in reversed(range(n)):
+        _ripple_unmajority(qc, addend_reg[i], target_reg[i], c)
+
+    # carry is left allocated (benchmarking-friendly; no uncomputation needed here)
+    return target_reg
+
+
+def _copy_register(qc: QuantumCircuit, src: QuantumRegister, dst: QuantumRegister) -> None:
+    """Copy src into dst assuming dst starts at |0...0> via CNOTs."""
+    if len(src) != len(dst):
+        raise ValueError("Copy requires registers of same length.")
+    for i in range(len(src)):
+        qc.cx(src[i], dst[i])
+
+
+def _init_const_register(qc: QuantumCircuit, value: int, nbits: int, name_hint: str = "const") -> QuantumRegister:
+    """Allocate and initialize an n-bit constant register (two's complement)."""
+    existing = {reg.name for reg in qc.qregs}
+    cname = unique_reg_name(existing, name_hint)
+    reg = QuantumRegister(nbits, name=cname)
+    qc.add_register(reg)
+    bits = int_to_twos_complement(value)
+    # Ensure we use exactly nbits (NUMBER_OF_BITS should match, but keep robust)
+    bits = (bits + [0] * nbits)[:nbits]
+    for i, bit in enumerate(bits):
+        if bit == 1:
+            qc.x(reg[i])
+    return reg
+
+
+# -----------------------------------------------------------------------------
+# QFT-based implementations (original behavior), kept intact but namespaced
+# -----------------------------------------------------------------------------
+
+def _qft_add_in_place(qc, a_reg, b_reg):
     """
     Add two quantum registers using a quantum circuit.
 
@@ -97,7 +198,7 @@ def add_in_place(qc, a_reg, b_reg):
         qc (QuantumCircuit): The quantum circuit to modify.
         a_reg (QuantumRegister): The first quantum register.
         b_reg (QuantumRegister): The second quantum register.
-    
+
     Returns:
         QuantumRegister: The quantum register containing the result of the addition.
     """
@@ -116,7 +217,8 @@ def add_in_place(qc, a_reg, b_reg):
     qc.append(QFT(NUMBER_OF_BITS, do_swaps=False).inverse(), a_reg)
     return a_reg
 
-def add(qc, a_reg, b_reg):
+
+def _qft_add(qc, a_reg, b_reg):
     n = len(a_reg)
 
     # Generate a unique name
@@ -145,7 +247,8 @@ def add(qc, a_reg, b_reg):
 
     return s_reg
 
-def addi_in_place(qc, qreg, b):
+
+def _qft_addi_in_place(qc, qreg, b):
     """
     Add a classical integer to a quantum register using a quantum circuit.
 
@@ -153,7 +256,7 @@ def addi_in_place(qc, qreg, b):
         qc (QuantumCircuit): The quantum circuit to modify.
         a_reg (QuantumRegister): The quantum register.
         b (int): The classical integer to add.
-    
+
     Returns:
         QuantumRegister: The quantum register containing the result of the addition.
     """
@@ -165,7 +268,7 @@ def addi_in_place(qc, qreg, b):
     if b >= 0:
         b_val = b_int
     else:
-        b_val = b_int - (1 << NUMBER_OF_BITS) 
+        b_val = b_int - (1 << NUMBER_OF_BITS)
 
     for j in range(NUMBER_OF_BITS):
         angle = (b_val * 2 * np.pi) / (2 ** (j + 1))
@@ -175,40 +278,12 @@ def addi_in_place(qc, qreg, b):
     qc.append(QFT(num_qubits=NUMBER_OF_BITS, do_swaps=False).inverse(), qreg)
     return qreg
 
-def invert(qc, qreg):
-    """
-    Invert the sign of a value in two's complement stored in a quantum register:
-    apply bitwise NOT and add 1.
 
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        qreg (QuantumRegister): The quantum register to negate.
-
-    Returns:
-        QuantumRegister: The modified quantum register (now contains -x).
-    """
-    # Step 1: Bitwise NOT (apply X to every qubit)
-    for qubit in qreg:
-        qc.x(qubit)
-
-    # Step 2: Add 1 using addi()
-    addi_in_place(qc, qreg, 1)
-
-    return qreg
-
-def addi(qc, a_reg, b):
+def _qft_addi(qc, a_reg, b):
     """
     Add a classical integer b to a quantum register a_reg,
     storing the result in a new quantum register (non-in-place).
     Leaves a_reg unchanged. Supports two's complement.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        a_reg (QuantumRegister): The quantum register to which b will be added.
-        b (int): The classical integer to add.
-
-    Returns:
-        QuantumRegister: A new quantum register containing the result (a + b).
     """
     n = len(a_reg)
     existing = {reg.name for reg in qc.qregs}
@@ -243,44 +318,113 @@ def addi(qc, a_reg, b):
     return s_reg
 
 
+# -----------------------------------------------------------------------------
+# Public API: add/addi switch between QFT and Ripple
+# -----------------------------------------------------------------------------
+
+def add_in_place(qc, a_reg, b_reg):
+    """
+    Add two quantum registers in place.
+
+    If ARITHMETIC_MODE == "qft": uses QFT-based adder (original).
+    If ARITHMETIC_MODE == "ripple": uses ripple-carry adder (target += addend).
+    """
+    if ARITHMETIC_MODE == "qft":
+        return _qft_add_in_place(qc, a_reg, b_reg)
+    else:
+        return _ripple_add_in_place(qc, a_reg, b_reg)
+
+
+def add(qc, a_reg, b_reg):
+    """
+    Add two quantum registers and return a new register holding the sum.
+
+    If ARITHMETIC_MODE == "qft": uses QFT-based out-of-place adder (original).
+    If ARITHMETIC_MODE == "ripple": allocates a fresh register, copies a, then adds b in place.
+    """
+    if ARITHMETIC_MODE == "qft":
+        return _qft_add(qc, a_reg, b_reg)
+
+    n = len(a_reg)
+    existing = {reg.name for reg in qc.qregs}
+    sname = unique_reg_name(existing, "sum")
+    s_reg = QuantumRegister(n, name=sname)
+    qc.add_register(s_reg)
+
+    _copy_register(qc, a_reg, s_reg)
+    _ripple_add_in_place(qc, s_reg, b_reg)
+    return s_reg
+
+
+def addi_in_place(qc, qreg, b):
+    """
+    Add a classical integer to a quantum register in place.
+
+    If ARITHMETIC_MODE == "qft": uses QFT-based addi (original).
+    If ARITHMETIC_MODE == "ripple": initializes a constant register and uses ripple add.
+    """
+    if ARITHMETIC_MODE == "qft":
+        return _qft_addi_in_place(qc, qreg, b)
+
+    n = len(qreg)
+    const_reg = _init_const_register(qc, b, n, name_hint="const")
+    _ripple_add_in_place(qc, qreg, const_reg)
+    return qreg
+
+
+def invert(qc, qreg):
+    """
+    Invert the sign of a value in two's complement stored in a quantum register:
+    apply bitwise NOT and add 1.
+    """
+    # Step 1: Bitwise NOT (apply X to every qubit)
+    for qubit in qreg:
+        qc.x(qubit)
+
+    # Step 2: Add 1
+    addi_in_place(qc, qreg, 1)
+
+    return qreg
+
+
+def addi(qc, a_reg, b):
+    """
+    Add a classical integer b to a quantum register a_reg,
+    storing the result in a new quantum register (non-in-place).
+    Leaves a_reg unchanged. Supports two's complement.
+    """
+    if ARITHMETIC_MODE == "qft":
+        return _qft_addi(qc, a_reg, b)
+
+    n = len(a_reg)
+    existing = {reg.name for reg in qc.qregs}
+    sname = unique_reg_name(existing, "sum")
+    s_reg = QuantumRegister(n, name=sname)
+    qc.add_register(s_reg)
+
+    _copy_register(qc, a_reg, s_reg)
+    addi_in_place(qc, s_reg, b)
+    return s_reg
+
 
 def sub(qc, a_reg, b_reg):
     """
     Subtract the contents of b_reg from a_reg using two's complement:
     a - b = a + (-b)
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        a_reg (QuantumRegister): The minuend register (a).
-        b_reg (QuantumRegister): The subtrahend register (b).
-    
-    Returns:
-        QuantumRegister: The register containing the result (in a_reg).
     """
-    # Invert the sign of b (i.e., compute -b)
     invert(qc, b_reg)
-
-    # Add -b to a
     result = add(qc, a_reg, b_reg)
-
-    # Invert the sign of b back to its original value
     invert(qc, b_reg)
     return result
+
 
 def subi(qc, qreg, b):
     """
     Subtract a classical integer from a quantum register using two's complement:
     a - b = a + (-b)
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        qreg (QuantumRegister): The quantum register to subtract from.
-        b (int): The classical integer to subtract.
-    
-    Returns:
-        QuantumRegister: The quantum register containing the result.
     """
     return addi(qc, qreg, -b)
+
 
 def twos_to_sign_magnitude(qc, qreg):
     """Convert ``qreg`` from two's complement to sign+magnitude representation.
@@ -320,20 +464,11 @@ def abs_val(qc, qreg):
     twos_to_sign_magnitude(qc, qreg)
     return qreg
 
+
 def mul(qc, a_reg, b_reg):
     """
     Multiply two quantum registers using QFT-based logic.
     Result is stored in an n-bit register (i.e. modulo 2^n).
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        a_reg (QuantumRegister): First multiplicand (n qubits).
-        b_reg (QuantumRegister): Second multiplicand (n qubits).
-        a_val (int): Optional known classical value of a (for sign correction).
-        b_val (int): Optional known classical value of b.
-
-    Returns:
-        QuantumRegister: New n-bit register with the product modulo 2^n.
     """
     n = len(a_reg)
     existing = {reg.name for reg in qc.qregs}
@@ -359,19 +494,11 @@ def mul(qc, a_reg, b_reg):
 
     return out_reg
 
+
 def muli(qc, a_reg, c, n_output_bits=None):
     """
     Multiply a quantum register by a classical constant c (can be negative).
     Stores result in a new register of size n_output_bits (default: len(a_reg)).
-
-    Args:
-        qc (QuantumCircuit): Circuit to modify.
-        a_reg (QuantumRegister): Input register.
-        c (int): Classical multiplier.
-        n_output_bits (int): Number of bits in output (default = len(a_reg)).
-
-    Returns:
-        QuantumRegister: Output register with result (two's complement if needed).
     """
     n = len(a_reg)
     if n_output_bits is None:
@@ -409,18 +536,6 @@ def muli(qc, a_reg, c, n_output_bits=None):
 def divu(qc, a_reg, b_reg, n_output_bits=None):
     """
     Divide unsigned ``a_reg`` by unsigned ``b_reg`` using restoring division.
-
-    Returns the quotient and remainder quantum registers. ``a_reg`` and ``b_reg``
-    remain unchanged.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        a_reg (QuantumRegister): Dividend register (n qubits).
-        b_reg (QuantumRegister): Divisor register (n qubits).
-        n_output_bits (int, optional): Width of the output quotient register. Defaults to n.
-
-    Returns:
-        tuple: (quotient QuantumRegister, remainder QuantumRegister)
     """
     n = len(a_reg)
     assert len(b_reg) == n, "Registers a_reg and b_reg must have the same length"
@@ -473,21 +588,7 @@ def divu(qc, a_reg, b_reg, n_output_bits=None):
 
 
 def divui(qc, a_reg, divisor, n_output_bits=None):
-    """Divide ``a_reg`` by the classical ``divisor`` using restoring division.
-
-    Returns the quotient and remainder registers.
-
-    Args:
-        qc (QuantumCircuit): Circuit to modify.
-        a_reg (QuantumRegister): Dividend register.
-        divisor (int): Unsigned integer divisor.
-        n_output_bits (int, optional): Size of the output register. Defaults to
-            ``len(a_reg)``.
-
-    Returns:
-        tuple: (quotient_register, remainder_register)
-    """
-
+    """Divide ``a_reg`` by the classical ``divisor`` using restoring division."""
     if divisor == 0:
         raise ValueError("Division by zero is not allowed.")
 
@@ -534,29 +635,7 @@ def divui(qc, a_reg, divisor, n_output_bits=None):
 
 
 def div(qc, a_reg, b_reg, n_output_bits=None):
-    """Divide signed ``a_reg`` by signed ``b_reg``.
-
-    The operation converts the inputs to sign+magnitude representation,
-    performs unsigned restoring division on the magnitudes, and finally
-    restores two's complement form on the outputs. The quotient sign is the
-    XOR of the input signs, and the remainder sign matches ``a_reg``'s sign.
-
-    Parameters
-    ----------
-    qc : QuantumCircuit
-        Circuit to modify.
-    a_reg : QuantumRegister
-        Dividend register.
-    b_reg : QuantumRegister
-        Divisor register.
-    n_output_bits : int, optional
-        Size of the quotient register (default: ``len(a_reg)``).
-
-    Returns
-    -------
-    tuple(QuantumRegister, QuantumRegister)
-        Quotient and remainder registers in two's complement.
-    """
+    """Divide signed ``a_reg`` by signed ``b_reg``."""
     n = len(a_reg)
     assert len(b_reg) == n
     if n_output_bits is None:
@@ -595,27 +674,7 @@ def div(qc, a_reg, b_reg, n_output_bits=None):
 
 
 def divi(qc, a_reg, divisor, n_output_bits=None):
-    """Divide signed ``a_reg`` by signed integer ``divisor``.
-
-    The implementation mirrors :func:`div` but with a classical divisor.
-
-    Parameters
-    ----------
-    qc : QuantumCircuit
-        Circuit to modify.
-    a_reg : QuantumRegister
-        Dividend register (two's complement).
-    divisor : int
-        Classical signed divisor.
-    n_output_bits : int, optional
-        Size of the quotient register (default: ``len(a_reg)``).
-
-    Returns
-    -------
-    tuple(QuantumRegister, QuantumRegister)
-        Quotient and remainder registers (two's complement).
-    """
-
+    """Divide signed ``a_reg`` by signed integer ``divisor``."""
     if divisor == 0:
         raise ValueError("Division by zero is not allowed.")
 
@@ -655,14 +714,7 @@ def divi(qc, a_reg, divisor, n_output_bits=None):
 
 
 def _controlled_addi_in_place(qc, qreg, value, control):
-    """Add ``value`` to ``qreg`` controlled by ``control`` qubit.
-
-    This helper uses the QFT based addition logic from :func:`addi_in_place`
-    but applies the phase rotations only when ``control`` is ``|1>``.  The
-    function assumes that ``qreg`` is ``len(qreg)`` qubits long and that the
-    global :data:`NUMBER_OF_BITS` matches this size.
-    """
-
+    """Add ``value`` to ``qreg`` controlled by ``control`` qubit."""
     n = len(qreg)
     qc.append(QFT(n, do_swaps=False), qreg)
 
@@ -680,7 +732,6 @@ def _controlled_addi_in_place(qc, qreg, value, control):
 
 def _sub_in_place(qc, a_reg, b_reg):
     """Subtract ``b_reg`` from ``a_reg`` in place."""
-
     n = len(a_reg)
     assert len(b_reg) == n
 
@@ -696,7 +747,6 @@ def _sub_in_place(qc, a_reg, b_reg):
 
 def _controlled_add_in_place(qc, a_reg, b_reg, control):
     """Add ``b_reg`` to ``a_reg`` controlled by ``control``."""
-
     n = len(a_reg)
     assert len(b_reg) == n
 
@@ -713,7 +763,6 @@ def _controlled_add_in_place(qc, a_reg, b_reg, control):
 
 def _controlled_invert_in_place(qc, qreg, control):
     """Negate ``qreg`` conditioned on ``control`` being ``|1>``."""
-
     for qubit in qreg:
         qc.cx(control, qubit)
     _controlled_addi_in_place(qc, qreg, 1, control)
@@ -747,6 +796,7 @@ def equal(qc, a_reg, b_reg):
         qc.x(q)
     return out[0]
 
+
 def not_equal(qc, a_reg, b_reg):
     eq = equal(qc, a_reg, b_reg)
     existing = {reg.name for reg in qc.qregs}
@@ -756,6 +806,7 @@ def not_equal(qc, a_reg, b_reg):
     qc.x(neq[0])
     qc.cx(eq, neq[0])
     return neq[0]
+
 
 def less_than(qc, a_reg, b_reg):
     n = max(len(a_reg), len(b_reg))
@@ -780,8 +831,10 @@ def less_than(qc, a_reg, b_reg):
     invert(qc, tmp_b)
     return out[0]
 
+
 def greater_than(qc, a_reg, b_reg):
     return less_than(qc, b_reg, a_reg)
+
 
 def less_equal(qc, a_reg, b_reg):
     gt = greater_than(qc, a_reg, b_reg)
@@ -793,6 +846,7 @@ def less_equal(qc, a_reg, b_reg):
     qc.cx(gt, le[0])
     return le[0]
 
+
 def greater_equal(qc, a_reg, b_reg):
     lt = less_than(qc, a_reg, b_reg)
     existing = {reg.name for reg in qc.qregs}
@@ -803,24 +857,17 @@ def greater_equal(qc, a_reg, b_reg):
     qc.cx(lt, ge[0])
     return ge[0]
 
+
 def measure_single(qc, qubit, name="result"):
     """Attach a classical bit measuring ``qubit`` to ``qc``."""
-
     creg = ClassicalRegister(1, name=name)
     qc.add_register(creg)
     qc.measure(qubit, creg[0])
 
+
 def initialize_bit(qc, value, name=None):
     """
     Initialize a single qubit to |0⟩ or |1⟩ based on a classical bit value.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        value (int): Bit value (0 or 1).
-        name (str, optional): Name of the qubit register.
-
-    Returns:
-        Qubit: Initialized qubit (|value⟩).
     """
     if value not in (0, 1):
         raise ValueError("Bit value must be 0 or 1.")
@@ -838,18 +885,10 @@ def initialize_bit(qc, value, name=None):
 
     return reg[0]
 
+
 def pad_register(qc, reg, target_size, name_hint="pad"):
     """
     Pad a quantum register with |0⟩ qubits to reach target size.
-
-    Args:
-        qc (QuantumCircuit): The circuit to modify.
-        reg (QuantumRegister): The quantum register to pad.
-        target_size (int): Desired final size.
-        name_hint (str): Prefix for naming new register.
-
-    Returns:
-        list[Qubit]: List of qubits padded to length `target_size`.
     """
     padded = list(reg)
     extra = target_size - len(reg)
@@ -862,27 +901,19 @@ def pad_register(qc, reg, target_size, name_hint="pad"):
     return padded
 
 
-
 def measure(qc, qreg):
     """
     Measure a quantum register and store the result in a classical register.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        qreg (QuantumRegister): The quantum register to measure.
     """
-    c_reg = ClassicalRegister(len(qreg), name=qreg.name+'_measure')
+    c_reg = ClassicalRegister(len(qreg), name=qreg.name + "_measure")
     qc.add_register(c_reg)
     qc.measure(qreg, c_reg)
+
 
 def simulate(qc, shots=1024):
     """
     Simulate the quantum circuit and print the interpreted two's complement value
     for each measured quantum register.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to simulate.
-        shots (int): The number of shots for the simulation.
     """
     if AerSimulator is not None:
         backend = AerSimulator(method="matrix_product_state")
@@ -895,18 +926,18 @@ def simulate(qc, shots=1024):
 
     # Get most frequent measurement result
     most_common = max(counts, key=counts.get)
-    bitstring = most_common.replace(' ', '')  # Qiskit returns MSB leftmost
+    bitstring = most_common.replace(" ", "")  # Qiskit returns MSB leftmost
 
     print(f"Measured bitstring: {bitstring}")
 
     offset = 0
     for creg in reversed(qc.cregs):
         reg_size = len(creg)
-        reg_bits = bitstring[offset:offset + reg_size]
+        reg_bits = bitstring[offset : offset + reg_size]
         offset += reg_size
 
         unsigned = int(reg_bits, 2)
-        if reg_bits and reg_bits[0] == '1' and reg_size > 1:
+        if reg_bits and reg_bits[0] == "1" and reg_size > 1:
             signed = unsigned - (1 << reg_size)
         else:
             signed = unsigned
@@ -915,17 +946,10 @@ def simulate(qc, shots=1024):
 
     return signed
 
+
 def logical_and(qc, q1, q2):
     """
     Compute logical AND between two qubits.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        q1 (Qubit): First input qubit.
-        q2 (Qubit): Second input qubit.
-
-    Returns:
-        Qubit: Output qubit set to |1> iff q1 == 1 and q2 == 1
     """
     existing = {reg.name for reg in qc.qregs}
     idx = 0
@@ -936,17 +960,10 @@ def logical_and(qc, q1, q2):
     qc.ccx(q1, q2, and_reg[0])
     return and_reg[0]
 
+
 def logical_or(qc, q1, q2):
     """
     Compute logical OR between two qubits.
-
-    Args:
-        qc (QuantumCircuit): The quantum circuit to modify.
-        q1 (Qubit): First input qubit.
-        q2 (Qubit): Second input qubit.
-
-    Returns:
-        Qubit: Output qubit set to |1> iff q1 == 1 or q2 == 1
     """
     existing = {reg.name for reg in qc.qregs}
     idx = 0
@@ -955,7 +972,7 @@ def logical_or(qc, q1, q2):
     or_reg = QuantumRegister(1, name=f"or{idx}")
     qc.add_register(or_reg)
 
-    qc.x(or_reg[0])        # initialize in |1>
+    qc.x(or_reg[0])  # initialize in |1>
     # Use De Morgan: q1 OR q2 = NOT (NOT q1 AND NOT q2)
     qc.x(q1)
     qc.x(q2)
@@ -963,7 +980,3 @@ def logical_or(qc, q1, q2):
     qc.x(q1)
     qc.x(q2)
     return or_reg[0]
-
-
-
-

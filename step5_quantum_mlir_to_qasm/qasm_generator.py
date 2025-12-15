@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 from qiskit import QuantumCircuit
 from xdsl.dialects.func import FuncOp, ReturnOp
@@ -36,8 +36,27 @@ from . import q_arithmetics as qa
 from . import q_arithmetics_controlled as qac
 
 
-def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False) -> QuantumCircuit:
+def generate_circuit(
+    module: ModuleOp,
+    num_bits: int = 16,
+    verbose: bool = False,
+    arithmetic_mode: str = "qft",  # "qft" | "ripple"
+) -> QuantumCircuit:
     """Convert ``module`` using the quantum dialect to a ``QuantumCircuit``."""
+
+    # ------------------------------------------------------------
+    # Selezione backend aritmetico (QFT vs Ripple Carry)
+    # ------------------------------------------------------------
+    # Default: "qft" (comportamento pre-esistente).
+    if hasattr(qa, "set_arithmetic_mode"):
+        qa.set_arithmetic_mode(arithmetic_mode)
+
+    # Propagazione anche al modulo controlled (per evitare confronto “misto”)
+    if hasattr(qac, "set_arithmetic_mode"):
+        try:
+            qac.set_arithmetic_mode(arithmetic_mode)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # Sync robusto del numero di bit su tutti i moduli coinvolti
@@ -62,6 +81,11 @@ def generate_circuit(module: ModuleOp, num_bits: int = 16, verbose: bool = False
             pass
         if hasattr(qac.qa, "NUMBER_OF_BITS"):
             qac.qa.NUMBER_OF_BITS = num_bits
+        if hasattr(qac.qa, "set_arithmetic_mode") and hasattr(qa, "set_arithmetic_mode"):
+            try:
+                qac.qa.set_arithmetic_mode(arithmetic_mode)
+            except Exception:
+                pass
 
     qc = QuantumCircuit()
     reg_map: Dict[object, object] = {}

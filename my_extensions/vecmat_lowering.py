@@ -1,6 +1,6 @@
 # my_extensions/vecmat_lowering.py
 
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Iterable, Any
 
 from step2_ast_to_dataclasses.c_ast import (
     TranslationUnit,
@@ -24,6 +24,75 @@ from my_extensions.vecmat_ir import (
     VecDotOp,
     MatMulOp,
 )
+
+
+# =========================
+# Normalizzazione stmt list
+# =========================
+
+def _flatten_stmts(stmts: Iterable[Any]) -> List[Any]:
+    """
+    Alcuni AST possono contenere liste annidate dentro CompoundStmt.stmts, es:
+        stmts=[[VarDecl(...)], ForStmt(...), AssignStmt(...)]
+    Questa funzione appiattisce ricorsivamente a:
+        [VarDecl(...), ForStmt(...), AssignStmt(...)]
+    """
+    out: List[Any] = []
+    for s in stmts:
+        if isinstance(s, list):
+            out.extend(_flatten_stmts(s))
+        else:
+            out.append(s)
+    return out
+
+
+def _compound_stmts(body: CompoundStmt) -> List[Any]:
+    """Ritorna la lista stmt normalizzata (flatten) di un CompoundStmt."""
+    return _flatten_stmts(getattr(body, "stmts", []))
+
+
+def _is_simple_for_header(for_stmt: ForStmt) -> tuple[bool, Optional[str], Optional[int]]:
+    """
+    Heuristica: riconosce header for standard:
+        for (int i = 0; i < N; i++)
+    Ritorna (ok, idx_name, bound).
+    """
+    init = getattr(for_stmt, "init", None)
+    if not isinstance(init, VarDecl):
+        return False, None, None
+    if not isinstance(init.init, IntegerLiteral):
+        return False, None, None
+    if init.init.value != 0:
+        return False, None, None
+    idx_name = init.name
+
+    cond = getattr(for_stmt, "condition", None)
+    if not isinstance(cond, BinaryOperatorWithImmediate):
+        return False, None, None
+    if cond.opcode not in ("<", "<="):
+        return False, None, None
+    if not isinstance(cond.lhs, DeclRef) or cond.lhs.name != idx_name:
+        return False, None, None
+    if not isinstance(cond.rhs, IntegerLiteral):
+        return False, None, None
+    bound = cond.rhs.value
+
+    incr = getattr(for_stmt, "increment", None)
+    if not isinstance(incr, AssignStmt):
+        return False, None, None
+    if not isinstance(incr.name, str) or incr.name != idx_name:
+        return False, None, None
+    incr_expr = incr.value
+    if not isinstance(incr_expr, BinaryOperatorWithImmediate):
+        return False, None, None
+    if incr_expr.opcode != "+":
+        return False, None, None
+    if not isinstance(incr_expr.lhs, DeclRef) or incr_expr.lhs.name != idx_name:
+        return False, None, None
+    if not isinstance(incr_expr.rhs, IntegerLiteral) or incr_expr.rhs.value != 1:
+        return False, None, None
+
+    return True, idx_name, bound
 
 
 # =========================
@@ -75,9 +144,10 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     body = for_stmt.body
     if not isinstance(body, CompoundStmt):
         return None
-    if len(body.stmts) != 1:
+    stmts = _compound_stmts(body)
+    if len(stmts) != 1:
         return None
-    stmt = body.stmts[0]
+    stmt = stmts[0]
     if not isinstance(stmt, AssignStmt):
         return None
 
@@ -170,9 +240,10 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     body = for_stmt.body
     if not isinstance(body, CompoundStmt):
         return None
-    if len(body.stmts) != 1:
+    stmts = _compound_stmts(body)
+    if len(stmts) != 1:
         return None
-    stmt = body.stmts[0]
+    stmt = stmts[0]
     if not isinstance(stmt, AssignStmt):
         return None
 
@@ -224,202 +295,108 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
 
 def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     """
-    Riconosce:
+    Riconosce (forma “matmul classica” con accumulatore locale s):
         for (int i = 0; i < M; i++) {
             for (int j = 0; j < N; j++) {
-                c[i][j] = 0;
+                int s = 0;
                 for (int k = 0; k < K; k++) {
-                    c[i][j] = c[i][j] + a[i][k] * b[k][j];
+                    s = s + A[i][k] * B[k][j];
                 }
+                C[i][j] = s;
             }
         }
+
+    Nota: la versione precedente assumeva body_j.stmts esattamente di lunghezza 2:
+        zero_stmt (Assign c[i][j]=0) + for_k
+    Ma l’AST osservato nel test contiene:
+        [VarDecl s=0, for_k(... update su s ...), Assign C[i][j]=s]
+    e, in più, può contenere liste annidate (stmts=[[VarDecl(...)], ...]).
     """
-    # (Il tuo codice è già corretto: lo si mantiene invariato)
-    # --- INCOLLA QUI IL TUO BLOCCO MATMUL ESATTAMENTE COME LO HAI ---
-    # Nota: per brevità non lo riscrivo una seconda volta qui, ma nel file reale
-    # va mantenuto integralmente il tuo codice del matmul, senza modifiche.
-
-    # >>>>> INIZIO (COPIA IL TUO BLOCCO ESISTENTE) <<<<<
-    init_i = for_i.init
-    if not isinstance(init_i, VarDecl):
-        return None
-    if not isinstance(init_i.init, IntegerLiteral) or init_i.init.value != 0:
-        return None
-    i_name = init_i.name
-
-    cond_i = for_i.condition
-    if not isinstance(cond_i, BinaryOperatorWithImmediate):
-        return None
-    if cond_i.opcode not in ("<", "<="):
-        return None
-    if not isinstance(cond_i.lhs, DeclRef) or cond_i.lhs.name != i_name:
-        return None
-    if not isinstance(cond_i.rhs, IntegerLiteral):
-        return None
-    m = cond_i.rhs.value
-
-    incr_i = for_i.increment
-    if not isinstance(incr_i, AssignStmt):
-        return None
-    if incr_i.name != i_name:
-        return None
-    incr_i_expr = incr_i.value
-    if not isinstance(incr_i_expr, BinaryOperatorWithImmediate):
-        return None
-    if incr_i_expr.opcode != "+":
-        return None
-    if not isinstance(incr_i_expr.lhs, DeclRef) or incr_i_expr.lhs.name != i_name:
-        return None
-    if not isinstance(incr_i_expr.rhs, IntegerLiteral) or incr_i_expr.rhs.value != 1:
+    ok_i, i_name, m = _is_simple_for_header(for_i)
+    if not ok_i or i_name is None or m is None:
         return None
 
     body_i = for_i.body
     if not isinstance(body_i, CompoundStmt):
         return None
-    if len(body_i.stmts) != 1:
+    stmts_i = _compound_stmts(body_i)
+    if len(stmts_i) != 1 or not isinstance(stmts_i[0], ForStmt):
         return None
-    for_j = body_i.stmts[0]
-    if not isinstance(for_j, ForStmt):
-        return None
+    for_j = stmts_i[0]
 
-    init_j = for_j.init
-    if not isinstance(init_j, VarDecl):
-        return None
-    if not isinstance(init_j.init, IntegerLiteral) or init_j.init.value != 0:
-        return None
-    j_name = init_j.name
-
-    cond_j = for_j.condition
-    if not isinstance(cond_j, BinaryOperatorWithImmediate):
-        return None
-    if cond_j.opcode not in ("<", "<="):
-        return None
-    if not isinstance(cond_j.lhs, DeclRef) or cond_j.lhs.name != j_name:
-        return None
-    if not isinstance(cond_j.rhs, IntegerLiteral):
-        return None
-    n = cond_j.rhs.value
-
-    incr_j = for_j.increment
-    if not isinstance(incr_j, AssignStmt):
-        return None
-    if incr_j.name != j_name:
-        return None
-    incr_j_expr = incr_j.value
-    if not isinstance(incr_j_expr, BinaryOperatorWithImmediate):
-        return None
-    if incr_j_expr.opcode != "+":
-        return None
-    if not isinstance(incr_j_expr.lhs, DeclRef) or incr_j_expr.lhs.name != j_name:
-        return None
-    if not isinstance(incr_j_expr.rhs, IntegerLiteral) or incr_j_expr.rhs.value != 1:
+    ok_j, j_name, n = _is_simple_for_header(for_j)
+    if not ok_j or j_name is None or n is None:
         return None
 
     body_j = for_j.body
     if not isinstance(body_j, CompoundStmt):
         return None
-    if len(body_j.stmts) != 2:
-        return None
+    stmts_j = _compound_stmts(body_j)
 
-    zero_stmt = body_j.stmts[0]
-    for_k = body_j.stmts[1]
-    if not isinstance(zero_stmt, AssignStmt):
+    # Ci aspettiamo: VarDecl(s=0), ForStmt(k-loop), Assign(C[i][j]=s)
+    if len(stmts_j) != 3:
         return None
+    s_decl, for_k, store_c = stmts_j
+
+    if not isinstance(s_decl, VarDecl):
+        return None
+    if not isinstance(s_decl.init, IntegerLiteral) or s_decl.init.value != 0:
+        return None
+    s_name = s_decl.name
+
     if not isinstance(for_k, ForStmt):
         return None
 
-    lhs_zero = zero_stmt.name
-    if not isinstance(lhs_zero, ArrayAccess):
+    if not isinstance(store_c, AssignStmt):
         return None
-    if not isinstance(lhs_zero.array, ArrayAccess):
+
+    # store_c: C[i][j] = s
+    lhs_store = store_c.name
+    if not isinstance(lhs_store, ArrayAccess):
         return None
-    c_outer = lhs_zero.array
+    if not isinstance(lhs_store.array, ArrayAccess):
+        return None
+    c_outer = lhs_store.array
     if not isinstance(c_outer.array, DeclRef):
         return None
     dest_name = c_outer.array.name
     if not isinstance(c_outer.index, DeclRef) or c_outer.index.name != i_name:
         return None
-    if not isinstance(lhs_zero.index, DeclRef) or lhs_zero.index.name != j_name:
+    if not isinstance(lhs_store.index, DeclRef) or lhs_store.index.name != j_name:
         return None
-    if not isinstance(zero_stmt.value, IntegerLiteral) or zero_stmt.value.value != 0:
+    if not isinstance(store_c.value, DeclRef) or store_c.value.name != s_name:
         return None
 
-    init_k = for_k.init
-    if not isinstance(init_k, VarDecl):
-        return None
-    if not isinstance(init_k.init, IntegerLiteral) or init_k.init.value != 0:
-        return None
-    k_name = init_k.name
-
-    cond_k = for_k.condition
-    if not isinstance(cond_k, BinaryOperatorWithImmediate):
-        return None
-    if cond_k.opcode not in ("<", "<="):
-        return None
-    if not isinstance(cond_k.lhs, DeclRef) or cond_k.lhs.name != k_name:
-        return None
-    if not isinstance(cond_k.rhs, IntegerLiteral):
-        return None
-    k_dim = cond_k.rhs.value
-
-    incr_k = for_k.increment
-    if not isinstance(incr_k, AssignStmt):
-        return None
-    if incr_k.name != k_name:
-        return None
-    incr_k_expr = incr_k.value
-    if not isinstance(incr_k_expr, BinaryOperatorWithImmediate):
-        return None
-    if incr_k_expr.opcode != "+":
-        return None
-    if not isinstance(incr_k_expr.lhs, DeclRef) or incr_k_expr.lhs.name != k_name:
-        return None
-    if not isinstance(incr_k_expr.rhs, IntegerLiteral) or incr_k_expr.rhs.value != 1:
+    # k-loop header
+    ok_k, k_name, k_dim = _is_simple_for_header(for_k)
+    if not ok_k or k_name is None or k_dim is None:
         return None
 
     body_k = for_k.body
     if not isinstance(body_k, CompoundStmt):
         return None
-    if len(body_k.stmts) != 1:
+    stmts_k = _compound_stmts(body_k)
+    if len(stmts_k) != 1:
         return None
-    update_stmt = body_k.stmts[0]
+    update_stmt = stmts_k[0]
     if not isinstance(update_stmt, AssignStmt):
         return None
 
-    lhs_update = update_stmt.name
-    if not isinstance(lhs_update, ArrayAccess):
-        return None
-    if not isinstance(lhs_update.array, ArrayAccess):
-        return None
-    c_outer2 = lhs_update.array
-    if not isinstance(c_outer2.array, DeclRef) or c_outer2.array.name != dest_name:
-        return None
-    if not isinstance(c_outer2.index, DeclRef) or c_outer2.index.name != i_name:
-        return None
-    if not isinstance(lhs_update.index, DeclRef) or lhs_update.index.name != j_name:
+    # update: s = s + A[i][k] * B[k][j]
+    if not isinstance(update_stmt.name, str) or update_stmt.name != s_name:
         return None
 
     rhs_update = update_stmt.value
     if not isinstance(rhs_update, BinaryOperator) or rhs_update.opcode != "+":
         return None
-
-    lhs_sum = rhs_update.lhs
-    if not isinstance(lhs_sum, ArrayAccess):
-        return None
-    if not isinstance(lhs_sum.array, ArrayAccess):
-        return None
-    c_outer3 = lhs_sum.array
-    if not isinstance(c_outer3.array, DeclRef) or c_outer3.array.name != dest_name:
-        return None
-    if not isinstance(c_outer3.index, DeclRef) or c_outer3.index.name != i_name:
-        return None
-    if not isinstance(lhs_sum.index, DeclRef) or lhs_sum.index.name != j_name:
+    if not isinstance(rhs_update.lhs, DeclRef) or rhs_update.lhs.name != s_name:
         return None
 
     mul = rhs_update.rhs
     if not isinstance(mul, BinaryOperator) or mul.opcode != "*":
         return None
 
+    # A[i][k]
     a_term = mul.lhs
     if not isinstance(a_term, ArrayAccess):
         return None
@@ -434,6 +411,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(a_term.index, DeclRef) or a_term.index.name != k_name:
         return None
 
+    # B[k][j]
     b_term = mul.rhs
     if not isinstance(b_term, ArrayAccess):
         return None
@@ -457,7 +435,6 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         k=k_dim,
         elem_bits=elem_bits,
     )
-    # >>>>> FINE (COPIA IL TUO BLOCCO ESISTENTE) <<<<<
 
 
 # =========================
@@ -554,6 +531,23 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
                 if vec_dot_op is not None:
                     vec_func.ops.append(vec_dot_op)
                     continue
+
+        # Diagnostica minima: se ci sono matrici 2D costanti ma nessun MatMulOp matchato,
+        # e nel body compare almeno un ForStmt (potenziale triplo loop), segnala.
+        try:
+            has_2d_const = any(
+                isinstance(sh, tuple) and len(sh) == 2
+                for sh in module.const_shapes.values()
+            )
+            has_any_for = any(isinstance(s, ForStmt) for s in getattr(func.body, "stmts", []))
+            has_matmul_op = any(isinstance(op, MatMulOp) for op in vec_func.ops)
+            if has_2d_const and has_any_for and not has_matmul_op:
+                print(
+                    f"[WARN] Possibile matmul presente in '{func.name}' ma pattern non riconosciuto. "
+                    f"Controllare la forma dell'AST (CompoundStmt.stmts annidati) o la struttura del triplo loop."
+                )
+        except Exception:
+            pass
 
         module.functions.append(vec_func)
 

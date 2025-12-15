@@ -88,14 +88,30 @@ def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> T
     """
     Mantiene l'ibrido evitando però che il percorso scalare compili anche i loop
     già riconosciuti come macro-op (vec_add / vec_dot / matmul).
+
+    Fix: alcuni AST possono contenere liste annidate dentro CompoundStmt.stmts
+    (es. [[VarDecl(...)], ForStmt(...), AssignStmt(...)]) e questo impedisce i match.
+    Qui si normalizza (flatten) prima di applicare i matcher.
     """
     tu2 = deepcopy(tu)
+
+    def _flatten_stmts(stmts):
+        out = []
+        for s in stmts:
+            if isinstance(s, list):
+                out.extend(_flatten_stmts(s))
+            else:
+                out.append(s)
+        return out
 
     for decl in tu2.decls:
         if not isinstance(decl, FunctionDecl):
             continue
         if not isinstance(decl.body, CompoundStmt):
             continue
+
+        # normalizza eventuali liste annidate
+        decl.body.stmts = _flatten_stmts(decl.body.stmts)
 
         new_stmts = []
         for s in decl.body.stmts:
@@ -111,7 +127,6 @@ def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> T
         decl.body.stmts = new_stmts
 
     return tu2
-
 
 def filter_out_vecmat_decls(tu: TranslationUnit) -> TranslationUnit:
     """
@@ -365,7 +380,6 @@ def _merge_scalar_and_vec_quantum(
         op.sym_name.data: op for op in scalar_top.ops if isinstance(op, FuncOp)
     }
 
-    # result_map prodotto da from_qar_to_quantum_mlir (se avete applicato la modifica al file qar_to_quantum_mlir.py)
     vec_result_map = getattr(vec_quantum_module, "result_map", None)
 
     for vec_func in vec_top.ops:
@@ -380,14 +394,12 @@ def _merge_scalar_and_vec_quantum(
         scalar_body: Block = scalar_func.body.blocks[0]
         vec_body: Block = vec_func.body.blocks[0]
 
-        # ReturnOp scalare (prima occorrenza)
         return_anchor: ReturnOp | None = None
         for op in scalar_body.ops:
             if isinstance(op, ReturnOp):
                 return_anchor = op
                 break
 
-        # Prologue anchor: prima op NON init e NON return; se non esiste, usare return
         prologue_anchor: Operation | None = None
         for op in scalar_body.ops:
             if isinstance(op, ReturnOp):
@@ -396,9 +408,8 @@ def _merge_scalar_and_vec_quantum(
                 prologue_anchor = op
                 break
         if prologue_anchor is None:
-            prologue_anchor = return_anchor  # può essere None
+            prologue_anchor = return_anchor
 
-        # Separa init e non-init dal vettoriale
         vec_inits: list[Operation] = []
         vec_others: list[Operation] = []
         for op in vec_body.ops:
@@ -420,14 +431,12 @@ def _merge_scalar_and_vec_quantum(
         def remap(v: SSAValue) -> SSAValue:
             return ssa_map.get(v, v)
 
-        # 1) Inserisci init nel prologo
         for init_op in vec_inits:
             new_init = init_op.clone()
             insert_before(prologue_anchor, new_init)
             if init_op.results and new_init.results:
                 ssa_map[init_op.results[0]] = new_init.results[0]
 
-        # 2) Inserisci altre op prima del return e rimappa SSA
         produced_results: list[SSAValue] = []
         for op in vec_others:
             new_op = op.clone()
@@ -438,7 +447,6 @@ def _merge_scalar_and_vec_quantum(
                 ssa_map[old_res] = new_res
                 produced_results.append(new_res)
 
-        # 3) Se return scalare è placeholder quantum.init 0, sostituire con il valore corretto
         if return_anchor is not None and return_anchor.operands:
             ret_val = return_anchor.operands[0]
             is_placeholder_zero = False
@@ -453,14 +461,12 @@ def _merge_scalar_and_vec_quantum(
                 chosen: SSAValue | None = None
                 hint = return_hints.get(fname)
 
-                # --- PRIMA SCELTA: result_map (corretto e generale) ---
                 if hint is not None and vec_result_map is not None:
                     try:
                         if hint.kind == "vec" and hint.index is not None:
                             key = (hint.name, hint.index)
                             if key in vec_result_map:
                                 chosen = remap(vec_result_map[key])
-
                         elif hint.kind == "mat" and hint.row is not None and hint.col is not None:
                             key = (hint.name, hint.row, hint.col)
                             if key in vec_result_map:
@@ -468,7 +474,6 @@ def _merge_scalar_and_vec_quantum(
                     except Exception:
                         chosen = None
 
-                # --- FALLBACK: sinks (solo se result_map non disponibile o chiave assente) ---
                 if chosen is None and produced_results:
                     sinks: list[SSAValue] = []
                     for r in produced_results:
@@ -493,8 +498,108 @@ def _merge_scalar_and_vec_quantum(
 
     return scalar_quantum_module
 
+
+# -------------------------
+# Metrics + scoring
+# -------------------------
+
+@dataclass(frozen=True)
+class CircuitMetrics:
+    mode: str
+    num_qubits: int
+    depth: int
+    size: int
+    count_ops_total: int
+    count_cx: int
+    count_t: int
+    count_tdg: int
+    count_h: int
+    count_p: int
+    count_rz: int
+    score: float
+
+
+def _compute_metrics_and_score(qc) -> CircuitMetrics:
+    """
+    Calcola metriche semplici, deterministiche e confrontabili:
+      - num_qubits: numero qubit
+      - depth: profondità circuito
+      - size: numero istruzioni
+      - count_*: conteggi di alcune porte tipiche
+      - score: punteggio unico (più basso = migliore)
+    """
+    num_qubits = qc.num_qubits
+    depth = int(qc.depth())
+    size = int(qc.size())
+
+    counts = qc.count_ops()
+    count_ops_total = int(sum(int(v) for v in counts.values()))
+    count_cx = int(counts.get("cx", 0))
+
+    count_t = int(counts.get("t", 0))
+    count_tdg = int(counts.get("tdg", 0))
+    count_h = int(counts.get("h", 0))
+    count_p = int(counts.get("p", 0))
+    count_rz = int(counts.get("rz", 0))
+
+    score = (
+        1.00 * num_qubits +
+        0.02 * depth +
+        0.01 * size +
+        0.40 * count_cx +
+        0.10 * (count_t + count_tdg) +
+        0.02 * count_h +
+        0.01 * (count_p + count_rz)
+    )
+
+    return CircuitMetrics(
+        mode="",
+        num_qubits=num_qubits,
+        depth=depth,
+        size=size,
+        count_ops_total=count_ops_total,
+        count_cx=count_cx,
+        count_t=count_t,
+        count_tdg=count_tdg,
+        count_h=count_h,
+        count_p=count_p,
+        count_rz=count_rz,
+        score=float(score),
+    )
+
+
+def _print_metrics(m: CircuitMetrics) -> None:
+    print("\n=== Circuit metrics ===")
+    print(f"mode        : {m.mode}")
+    print(f"num_qubits  : {m.num_qubits}")
+    print(f"depth       : {m.depth}")
+    print(f"size        : {m.size}")
+    print(f"ops_total   : {m.count_ops_total}")
+    print(f"cx          : {m.count_cx}")
+    print(f"t           : {m.count_t}")
+    print(f"tdg         : {m.count_tdg}")
+    print(f"h           : {m.count_h}")
+    print(f"p           : {m.count_p}")
+    print(f"rz          : {m.count_rz}")
+    print(f"score       : {m.score:.3f} (lower is better)")
+
+
+def _print_comparison(a: CircuitMetrics, b: CircuitMetrics) -> None:
+    print("\n=== Comparison ===")
+    better = a if a.score <= b.score else b
+    worse = b if better is a else a
+    print(f"Better score: {better.mode} ({better.score:.3f})")
+    print(f"Worse score : {worse.mode} ({worse.score:.3f})")
+    print("Note: lo score è una regola euristica interna basata su qubit/depth/porte.")
+
+
 def compile_c_file(
-    c_file: str, num_bits: int = 16, verbose: bool = False, pretty: bool = False, run: bool = False
+    c_file: str,
+    num_bits: int = 16,
+    verbose: bool = False,
+    pretty: bool = False,
+    run: bool = False,
+    adder: str = "qft",  # "qft" | "ripple" | "both"
 ) -> str:
     base = os.path.splitext(os.path.basename(c_file))[0]
 
@@ -516,14 +621,12 @@ def compile_c_file(
     print("=== VecMatModule (dialetto vettoriale/matriciale) ===")
     pprint(vecmat_module)
 
-    # Hint per collegare return (c[i], C[r][c]) quando il percorso scalare è stato filtrato
     return_hints = _extract_return_hints(tu, vecmat_module)
 
     has_vecmat_ops = any(func.ops for func in vecmat_module.functions)
     has_vecmat_consts = bool(getattr(vecmat_module, "const_arrays", {}) or {})
     enable_vecmat_path = has_vecmat_ops or has_vecmat_consts
 
-    # Step 3a: percorso SCALARE originale QuantumC, filtrato se c'è vec/mat
     if enable_vecmat_path and has_vecmat_ops:
         tu_filtered = filter_out_recognized_vecmat_loops(tu, num_bits)
         tu_filtered = filter_out_vecmat_decls(tu_filtered)
@@ -571,15 +674,65 @@ def compile_c_file(
     quantum_path = os.path.join(QMLIR_DIR, f"{base}_quantum_final.mlir")
     save_module(quantum_module, quantum_path)
 
-    circuit = generate_circuit(quantum_module, num_bits=num_bits, verbose=verbose)
-    qasm_path = os.path.join(QASM_DIR, f"{base}.qasm")
+    def _build(mode: str):
+        circuit = generate_circuit(quantum_module, num_bits=num_bits, verbose=verbose, arithmetic_mode=mode)
 
-    if run:
-        export_qasm(circuit, qasm_path)
+        # Metriche sempre disponibili sul circuito "as built"
+        m_raw = _compute_metrics_and_score(circuit)
+        m_raw = CircuitMetrics(mode=mode, **{k: getattr(m_raw, k) for k in m_raw.__dataclass_fields__ if k != "mode"})
+
+        # Transpile: utile per confrontare in Clifford+T, ma non deve bloccare tutto.
+        circuit_ct = None
+        try:
+            from qiskit import transpile as _transpile
+            clifford_t_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
+            # riduce il rischio di blocchi: optimization_level più basso
+            circuit_ct = _transpile(circuit, basis_gates=clifford_t_basis, optimization_level=1)
+
+            m_ct = _compute_metrics_and_score(circuit_ct)
+            m_ct = CircuitMetrics(mode=mode, **{k: getattr(m_ct, k) for k in m_ct.__dataclass_fields__ if k != "mode"})
+            return circuit, circuit_ct, m_ct
+
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print(f"\n[WARN] Transpile Clifford+T fallito o troppo costoso per mode={mode}.")
+            print(f"       Uso metriche sul circuito non-transpilato. Dettaglio: {type(e).__name__}: {e}")
+            return circuit, None, m_raw
+    if adder not in ("qft", "ripple", "both"):
+        raise ValueError("adder must be one of: qft, ripple, both")
+
+    if adder == "both":
+        circuit_qft, _circuit_qft_ct, m_qft = _build("qft")
+        circuit_rip, _circuit_rip_ct, m_rip = _build("ripple")
+
+        _print_metrics(m_qft)
+        _print_metrics(m_rip)
+        _print_comparison(m_qft, m_rip)
+
+        qasm_path_qft = os.path.join(QASM_DIR, f"{base}_qft.qasm")
+        qasm_path_rip = os.path.join(QASM_DIR, f"{base}_ripple.qasm")
+
+        if run:
+            export_qasm(circuit_qft, qasm_path_qft)
+            export_qasm(circuit_rip, qasm_path_rip)
+        else:
+            export_qasm_clifford_t(circuit_qft, qasm_path_qft)
+            export_qasm_clifford_t(circuit_rip, qasm_path_rip)
+
+        return qasm_path_qft
+
     else:
-        export_qasm_clifford_t(circuit, qasm_path)
+        circuit, _circuit_ct, m = _build(adder)
+        _print_metrics(m)
 
-    return qasm_path
+        qasm_path = os.path.join(QASM_DIR, f"{base}_{adder}.qasm")
+        if run:
+            export_qasm(circuit, qasm_path)
+        else:
+            export_qasm_clifford_t(circuit, qasm_path)
+
+        return qasm_path
 
 
 def main() -> None:
@@ -591,6 +744,13 @@ def main() -> None:
     parser.add_argument("--pretty", action="store_true", help="Print the parsed C code from the AST")
     parser.add_argument("--time", action="store_true", help="Print total compilation + simulation time")
 
+    parser.add_argument(
+        "--adder",
+        choices=["qft", "ripple", "both"],
+        default="qft",
+        help="Choose arithmetic backend: qft, ripple, or both (runs both and prints comparison).",
+    )
+
     args = parser.parse_args()
 
     start = time.time() if args.time else None
@@ -601,6 +761,7 @@ def main() -> None:
         verbose=args.verbose,
         pretty=args.pretty,
         run=args.run,
+        adder=args.adder,
     )
 
     if args.run:
