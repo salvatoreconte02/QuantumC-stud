@@ -1,46 +1,145 @@
-# QuantumC
+# QuantumC Extended
 
-**QuantumC** is a modular, high-level synthesis framework that compiles classical C programs into quantum circuits. It leverages structured intermediate representations (IRs) inspired by MLIR to ensure modularity, semantic correctness, and compatibility with the fundamental constraints of quantum computing (e.g., unitarity, reversibility, no-cloning).
+**QuantumC Extended** is an extended version of [QuantumC](https://github.com/leonardopagliochini/QuantumC), a modular high-level synthesis framework that compiles classical C programs into quantum circuits (OpenQASM).
 
-Instead of programming directly in quantum assembly, QuantumC allows developers to write familiar C-style code and generate executable quantum circuits—ready for simulation, benchmarking, or deployment on Qiskit-compatible hardware.
-
----
-
-## Why QuantumC?
-
-Modern quantum computing demands **resource-aware**, **modular**, and **reversible** circuits. Writing these manually is error-prone and impractical at scale.
-
-QuantumC introduces:
-
-- **High-level synthesis from C**, enabling broader access to quantum programming.
-- **Intermediate Representations (IRs)** that support optimizations, inspection, and rewrites.
-- **Quantum-aware lowering** that respects quantum constraints at every stage.
-- **Integration with Qiskit**, producing standard OpenQASM output ready for simulation or transpilation.
-
-QuantumC enables a self-contained, quantum-native execution model—without hybrid offloading of classical logic.
+This fork adds support for **vector/matrix operations**, **multiple arithmetic backends**, and **hybrid scalar+vector compilation**.
 
 ---
 
-## Architecture Overview
+## Extensions over Original QuantumC
+
+| Extension | Description |
+|-----------|-------------|
+| **Vector Operations** | Pattern-based recognition of `vec_add`, `vec_dot` loops |
+| **Matrix Operations** | Pattern-based recognition of `matmul` triple-nested loops |
+| **Ripple-Carry Backend** | Alternative to QFT arithmetic (`--adder ripple`) |
+| **Hybrid Compilation** | Mixed scalar + vector/matrix programs in a single circuit |
+| **Compile-time Arrays** | Support for `int a[4] = {1,2,3,4};` and 2D matrices |
+| **Metrics & Comparison** | Automatic scoring and comparison between backends |
+
+---
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install xdsl qiskit qiskit-aer
+
+# Basic compilation
+python pipeline.py tests/scalar/add.c
+
+# Compile and simulate
+python pipeline.py tests/scalar/add.c --run
+
+# Use ripple-carry arithmetic
+python pipeline.py tests/scalar/add.c --adder ripple --run
+
+# Compare QFT vs Ripple-carry
+python pipeline.py tests/scalar/add.c --adder both
+```
+
+---
+
+## Test Suite
+
+The test suite is organized into 5 categories with 18 tests total:
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| `scalar` | 3 | Basic scalar integer operations |
+| `vector` | 3 | Vector addition and dot product |
+| `matrix` | 3 | Matrix multiplication |
+| `hybrid` | 3 | Mixed scalar + vector/matrix programs |
+| `comparison` | 6 | Backend comparison tests |
+
+### Running Tests
+
+```bash
+# Run all tests
+python test_c_file.py --all
+
+# Run a specific category
+python test_c_file.py --category scalar
+python test_c_file.py --category vector
+python test_c_file.py --category matrix
+
+# Run with different backends
+python test_c_file.py --all --adder ripple
+python test_c_file.py --all --adder both
+
+# Run a single test
+python test_c_file.py tests/scalar/add.c
+```
+
+---
+
+## Pipeline Architecture
 
 The compilation pipeline follows these stages:
 
-1. **C to JSON AST**  
-   Uses `clang -ast-dump=json` to parse C source code.
+```
+C Source
+    |
+[Stage 1] clang -ast-dump=json -> JSON AST
+    |
+[Stage 2] AST to Python dataclasses
+    |
+[Stage 3] Dataclasses to Classical MLIR (SSA form via xDSL)
+    |
+[Stage 4] Classical MLIR to Quantum MLIR
+    |     + Hybrid path for vector/matrix operations
+    |
+[Stage 5] Quantum MLIR to QASM (via Qiskit)
+```
 
-2. **AST to Dataclasses**  
-   The AST is normalized into structured Python dataclasses for clean semantic traversal.
+### Hybrid Vector/Matrix Path
 
-3. **Dataclasses to Classical MLIR**  
-   Lowered into a classical IR using SSA form (via xDSL), which supports control flow and typed arithmetic.
+When the AST contains recognized patterns (vec_add, vec_dot, matmul), a parallel path is activated:
 
-4. **Classical MLIR to Quantum IR**  
-   Translated into a custom dialect encoding quantum semantics, respecting unitarity and linearity.
+1. **Pattern matching**: Recognizes loop patterns and extracts VecMatModule
+2. **VecMat to QAR**: Converts to Quantum Arithmetic Representation
+3. **QAR to Quantum MLIR**: Generates quantum operations
+4. **Merge**: Combines scalar and vector paths
 
-5. **Quantum IR to QASM**  
-   Final circuits are generated using Qiskit in Clifford+T gate form.
+---
 
-Each stage emits intermediate artifacts for inspection and debugging.
+## Supported C Subset
+
+**Supported:**
+- Integer variables (signed, configurable bitwidth)
+- Arithmetic: `+`, `-`, `*`, `/`
+- Logical: `&&`, `||`, `!`
+- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
+- Unary: `+`, `-`, `~`, `++`, `--`
+- Control flow: `if`, `else`, `for` (static unroll)
+- Arrays (1D vectors, 2D matrices) with compile-time initialization
+- Return statements
+
+**Not supported:** Pointers, floats, function calls, structs, dynamic allocation, while loops.
+
+---
+
+## Command Line Options
+
+| Flag | Description |
+|------|-------------|
+| `--bits N` | Set bits per quantum integer (default: 16) |
+| `--run` | Simulate the circuit after generation |
+| `--adder {qft,ripple,both}` | Arithmetic backend selection |
+| `--verbose` | Print detailed debug information |
+| `--pretty` | Pretty-print reconstructed C code |
+| `--time` | Report compilation timing |
+
+---
+
+## Output Artifacts
+
+| Stage | Output Path |
+|-------|-------------|
+| JSON AST | `json_out/<name>.json` |
+| Classical MLIR | `mlir_out/<name>_classical.mlir` |
+| Quantum MLIR | `quantum_mlir_out/<name>_quantum_*.mlir` |
+| OpenQASM | `output/<name>_<adder>.qasm` |
 
 ---
 
@@ -48,150 +147,37 @@ Each stage emits intermediate artifacts for inspection and debugging.
 
 - Python 3.10+
 - Clang with `-ast-dump=json` support
-- [xDSL](https://github.com/xdslproject/xdsl)
-- [Qiskit](https://qiskit.org/)
-
-Install dependencies:
+- xDSL, Qiskit, Qiskit-Aer
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install xdsl qiskit
+pip install xdsl qiskit qiskit-aer
 ```
 
 ---
 
-## ⚙️ How to Run
+## Repository Structure
 
-You can run the entire compilation pipeline using:
-
-```bash
-python pipeline.py                      # Compile default example (c_code/try.c)
-python pipeline.py path/to/file.c       # Compile custom C file
-```
-
-Optional flags:
-
-| Flag         | Description                                                       |
-|--------------|-------------------------------------------------------------------|
-| `--bits N`   | Set the number of bits per quantum integer (default: 16)          |
-| `--run`      | Simulate the circuit after generation using Qiskit                |
-| `--verbose`  | Print detailed debug information                                  |
-| `--pretty`   | Pretty-print reconstructed C code before lowering                 |
-| `--time`     | Report full compilation and simulation time                       |
-
-Example:
-
-```bash
-python pipeline.py c_code/example.c --bits 8 --run --verbose --time
-```
+| Folder | Purpose |
+|--------|---------|
+| `tests/` | Organized test suite (scalar, vector, matrix, hybrid, comparison) |
+| `c_code/others/` | Legacy tests from upstream |
+| `my_extensions/` | Vector/matrix pattern recognition and lowering |
+| `step1_c_to_ast/` | AST generation with Clang |
+| `step2_ast_to_dataclasses/` | AST parsing to Python dataclasses |
+| `step3_dataclasses_to_mlir/` | Classical MLIR generation |
+| `step4_mlir_to_quantum_mlir/` | Quantum dialect translation |
+| `step5_quantum_mlir_to_qasm/` | QASM generation via Qiskit |
 
 ---
 
-## Output Structure
+## Credits
 
-The following files are generated:
+This project extends the original [QuantumC](https://github.com/leonardopagliochini/QuantumC) by Leonardo Pagliochini and Francesco Rosnati.
 
-| File/Dir                     | Description                                         |
-|-----------------------------|-----------------------------------------------------|
-| `json_out/<file>.json`      | AST generated by Clang                             |
-| `mlir_out/<file>_classical.mlir` | Classical MLIR in SSA form                        |
-| `quantum_mlir_out/<file>_quantum.mlir` | Quantum-aware IR (QMLIR)                    |
-| `output/<file>.qasm`        | OpenQASM file emitted via Qiskit                   |
-
----
-
-## Supported Features
-
-### Language Constructs
-
-- Scalar signed integers with configurable bitwidth (default: 16)
-- Arithmetic: `+`, `-`, `*`, `/` (QFT-based, ancilla-efficient)
-- Logical: `&&`, `||`, `!`
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Unary: `+`, `-`, `~`, `++`, `--` (prefix/postfix)
-- Control flow: `if`, `else`, `else if`, `for`
-- `return` statements
-
-### Compilation Techniques
-
-- Static unrolling of loops
-- Quantum-controlled conditionals
-- QFT-based arithmetic for ancilla minimization
-- Quantum division (restoring method)
-- Controlled operations with entanglement-aware design
-- Compliance with unitarity, no-cloning, no-deletion
-
----
-
-## Benchmarks
-
-We evaluated the pipeline using 10 representative C benchmarks. Example:
-
-```c
-int main() {
-  int acc = 1;
-  for (int i = 0; i < 6; i++) {
-    acc = acc * 3;
-  }
-  return acc;
-}
-```
-
-### Compilation Time vs. Bitwidth
-
-| Bitwidth | Time (s) |
-|----------|----------|
-| 4        | 0.50     |
-| 8        | 1.75     |
-| 16       | 10.02    |
-| 32       | 92.73    |
-
-### Quantum Complexity (16-bit registers)
-
-| Program                          | Qubits | Gates | CX   | T    |
-|----------------------------------|--------|-------|------|------|
-| looped_multiplication.c         | 1037   | 43497 | 11268| 378  |
-| unary_operators.c               | 64     | 1583  | 121  | 0    |
-| loop_with_compound_body.c       | 1037   | 57136 | 17338| 378  |
-| nested_if_else.c                | 74     | 1178  | 19   | 0    |
-
----
-
-## 📁 Repository Structure
-
-| Folder                         | Purpose                                 |
-|--------------------------------|-----------------------------------------|
-| `c_code/`                      | C benchmark programs                    |
-| `step1_c_to_ast/`              | AST generation with Clang               |
-| `step2_ast_to_dataclasses/`    | AST parsing to Python dataclasses       |
-| `step3_dataclasses_to_mlir/`   | SSA-based classical MLIR generation     |
-| `step4_mlir_to_quantum_mlir/`  | Quantum-aware IR lowering               |
-| `step5_quantum_mlir_to_qasm/`  | QASM generation via Qiskit              |
-| `output/`                      | Emitted QASM files                      |
-
----
-
-## 🧭 Future Developments
-
-- 🧬 QASM to IR lifting for debugging and rewriting
-- 🔄 Cross-dialect conversion with QIRO, xDSL, etc.
-- 🧠 Intermediate IR optimizations (DCE, folding, etc.)
-- 🔧 Hardware-aware lowering strategies
-- 💡 Integration with Verilog/SystemC frontends
-
----
-
-## 📚 References
-
-The full technical report will be available in the next few days.. :)
-
----
-
-## 📸 Acknowledgments
-
-Quantum circuit diagrams are generated with [Qiskit](https://qiskit.org/). We thank the xDSL and Qiskit communities for their tools and documentation.
-
-## Contributions
+### Original QuantumC Authors
 - Leonardo Ignazio Pagliochini - [GitHub](https://github.com/leonardopagliochini)
 - Francesco Rosnati - [GitHub](https://github.com/RosNaviGator)
+
+### Extensions
+- Salvatore Conte
+- Simone Cosenza

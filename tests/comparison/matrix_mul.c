@@ -1,4 +1,3 @@
-// c_code/test_confronto/t_matmul_2x2.c
 int main() {
   int A[2][2] = {{1, 2}, {3, 4}};
   int B[2][2] = {{2, 0}, {1, 2}};
