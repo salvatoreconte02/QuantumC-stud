@@ -684,30 +684,32 @@ def compile_c_file(
         m_raw = _compute_metrics_and_score(circuit)
         m_raw = CircuitMetrics(mode=mode, **{k: getattr(m_raw, k) for k in m_raw.__dataclass_fields__ if k != "mode"})
 
-        # Transpile: utile per confrontare in Clifford+T, ma non deve bloccare tutto.
-        circuit_ct = None
+        # Transpile verso un basis NISQ-oriented (include rotazioni native).
+        # NOTA: questo NON è un vero basis Clifford+T (che sarebbe solo h,s,t,cx,x).
+        # Il basis include rz, p, cp, crz che sono rotazioni continue supportate
+        # nativamente da hardware NISQ (superconducting, trapped ions, etc.).
+        circuit_nisq = None
         try:
             from qiskit import transpile as _transpile
-            clifford_t_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
-            # riduce il rischio di blocchi: optimization_level più basso
-            circuit_ct = _transpile(circuit, basis_gates=clifford_t_basis, optimization_level=1)
+            nisq_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
+            circuit_nisq = _transpile(circuit, basis_gates=nisq_basis, optimization_level=1)
 
-            m_ct = _compute_metrics_and_score(circuit_ct)
-            m_ct = CircuitMetrics(mode=mode, **{k: getattr(m_ct, k) for k in m_ct.__dataclass_fields__ if k != "mode"})
-            return circuit, circuit_ct, m_ct
+            m_nisq = _compute_metrics_and_score(circuit_nisq)
+            m_nisq = CircuitMetrics(mode=mode, **{k: getattr(m_nisq, k) for k in m_nisq.__dataclass_fields__ if k != "mode"})
+            return circuit, circuit_nisq, m_nisq
 
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            print(f"\n[WARN] Transpile Clifford+T fallito o troppo costoso per mode={mode}.")
+            print(f"\n[WARN] Transpile NISQ fallito o troppo costoso per mode={mode}.")
             print(f"       Uso metriche sul circuito non-transpilato. Dettaglio: {type(e).__name__}: {e}")
             return circuit, None, m_raw
     if adder not in ("qft", "ripple", "both"):
         raise ValueError("adder must be one of: qft, ripple, both")
 
     if adder == "both":
-        circuit_qft, _circuit_qft_ct, m_qft = _build("qft")
-        circuit_rip, _circuit_rip_ct, m_rip = _build("ripple")
+        circuit_qft, _circuit_qft_nisq, m_qft = _build("qft")
+        circuit_rip, _circuit_rip_nisq, m_rip = _build("ripple")
 
         _print_metrics(m_qft)
         _print_metrics(m_rip)
@@ -726,7 +728,7 @@ def compile_c_file(
         return qasm_path_qft
 
     else:
-        circuit, _circuit_ct, m = _build(adder)
+        circuit, _circuit_nisq, m = _build(adder)
         _print_metrics(m)
 
         qasm_path = os.path.join(QASM_DIR, f"{base}_{adder}.qasm")
