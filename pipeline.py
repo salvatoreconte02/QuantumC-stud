@@ -45,6 +45,7 @@ from my_extensions.vecmat_lowering import (
     _match_vec_add_for,
     _match_vec_dot_for,
     _match_matmul_for,
+    _match_matmul_for_direct,
 )
 from my_extensions.vecmat_to_qar import from_vecmat_to_qar
 from my_extensions.qar_to_quantum_mlir import from_qar_to_quantum_mlir
@@ -117,6 +118,8 @@ def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> T
         for s in decl.body.stmts:
             if isinstance(s, ForStmt):
                 if _match_matmul_for(s, elem_bits) is not None:
+                    continue
+                if _match_matmul_for_direct(s, elem_bits) is not None:
                     continue
                 if _match_vec_add_for(s, elem_bits) is not None:
                     continue

@@ -438,6 +438,178 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
 
 
 # =========================
+# matmul (triplo loop) - forma con accumulo diretto
+# =========================
+
+def _match_matmul_for_direct(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
+    """
+    Riconosce la forma con accumulo diretto:
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < N; j++) {
+                C[i][j] = 0;
+                for (int k = 0; k < K; k++) {
+                    C[i][j] = C[i][j] + A[i][k] * B[k][j];
+                }
+            }
+        }
+    """
+    # Verifica header loop i
+    ok_i, i_name, m = _is_simple_for_header(for_i)
+    if not ok_i or i_name is None or m is None:
+        return None
+
+    # Body di i deve contenere solo for_j
+    body_i = for_i.body
+    if not isinstance(body_i, CompoundStmt):
+        return None
+    stmts_i = _compound_stmts(body_i)
+    if len(stmts_i) != 1 or not isinstance(stmts_i[0], ForStmt):
+        return None
+    for_j = stmts_i[0]
+
+    # Verifica header loop j
+    ok_j, j_name, n = _is_simple_for_header(for_j)
+    if not ok_j or j_name is None or n is None:
+        return None
+
+    # Body di j deve contenere esattamente 2 statement:
+    # 1. AssignStmt: C[i][j] = 0
+    # 2. ForStmt: k-loop
+    body_j = for_j.body
+    if not isinstance(body_j, CompoundStmt):
+        return None
+    stmts_j = _compound_stmts(body_j)
+    if len(stmts_j) != 2:
+        return None
+
+    zero_stmt, for_k = stmts_j
+
+    if not isinstance(zero_stmt, AssignStmt):
+        return None
+    if not isinstance(for_k, ForStmt):
+        return None
+
+    # Verifica zero_stmt: C[i][j] = 0
+    lhs_zero = zero_stmt.name
+    if not isinstance(lhs_zero, ArrayAccess):
+        return None
+    # C[i][j] -> lhs_zero.array è C[i], lhs_zero.index è j
+    if not isinstance(lhs_zero.array, ArrayAccess):
+        return None
+    c_outer = lhs_zero.array
+    if not isinstance(c_outer.array, DeclRef):
+        return None
+    dest_name = c_outer.array.name
+    # c_outer.index deve essere i
+    if not isinstance(c_outer.index, DeclRef) or c_outer.index.name != i_name:
+        return None
+    # lhs_zero.index deve essere j
+    if not isinstance(lhs_zero.index, DeclRef) or lhs_zero.index.name != j_name:
+        return None
+    # Il valore deve essere 0
+    if not isinstance(zero_stmt.value, IntegerLiteral) or zero_stmt.value.value != 0:
+        return None
+
+    # Verifica for_k header
+    ok_k, k_name, k_dim = _is_simple_for_header(for_k)
+    if not ok_k or k_name is None or k_dim is None:
+        return None
+
+    # Body di k: C[i][j] = C[i][j] + A[i][k] * B[k][j]
+    body_k = for_k.body
+    if not isinstance(body_k, CompoundStmt):
+        return None
+    stmts_k = _compound_stmts(body_k)
+    if len(stmts_k) != 1:
+        return None
+    update_stmt = stmts_k[0]
+    if not isinstance(update_stmt, AssignStmt):
+        return None
+
+    # LHS: C[i][j]
+    lhs_update = update_stmt.name
+    if not isinstance(lhs_update, ArrayAccess):
+        return None
+    if not isinstance(lhs_update.array, ArrayAccess):
+        return None
+    c_update_outer = lhs_update.array
+    if not isinstance(c_update_outer.array, DeclRef):
+        return None
+    if c_update_outer.array.name != dest_name:
+        return None
+    if not isinstance(c_update_outer.index, DeclRef) or c_update_outer.index.name != i_name:
+        return None
+    if not isinstance(lhs_update.index, DeclRef) or lhs_update.index.name != j_name:
+        return None
+
+    # RHS: C[i][j] + A[i][k] * B[k][j]
+    rhs_update = update_stmt.value
+    if not isinstance(rhs_update, BinaryOperator) or rhs_update.opcode != "+":
+        return None
+
+    # rhs_update.lhs deve essere C[i][j]
+    c_read = rhs_update.lhs
+    if not isinstance(c_read, ArrayAccess):
+        return None
+    if not isinstance(c_read.array, ArrayAccess):
+        return None
+    c_read_outer = c_read.array
+    if not isinstance(c_read_outer.array, DeclRef):
+        return None
+    if c_read_outer.array.name != dest_name:
+        return None
+    if not isinstance(c_read_outer.index, DeclRef) or c_read_outer.index.name != i_name:
+        return None
+    if not isinstance(c_read.index, DeclRef) or c_read.index.name != j_name:
+        return None
+
+    # rhs_update.rhs deve essere A[i][k] * B[k][j]
+    mul = rhs_update.rhs
+    if not isinstance(mul, BinaryOperator) or mul.opcode != "*":
+        return None
+
+    # A[i][k]
+    a_term = mul.lhs
+    if not isinstance(a_term, ArrayAccess):
+        return None
+    if not isinstance(a_term.array, ArrayAccess):
+        return None
+    a_outer = a_term.array
+    if not isinstance(a_outer.array, DeclRef):
+        return None
+    lhs_name = a_outer.array.name
+    if not isinstance(a_outer.index, DeclRef) or a_outer.index.name != i_name:
+        return None
+    if not isinstance(a_term.index, DeclRef) or a_term.index.name != k_name:
+        return None
+
+    # B[k][j]
+    b_term = mul.rhs
+    if not isinstance(b_term, ArrayAccess):
+        return None
+    if not isinstance(b_term.array, ArrayAccess):
+        return None
+    b_outer = b_term.array
+    if not isinstance(b_outer.array, DeclRef):
+        return None
+    rhs_name = b_outer.array.name
+    if not isinstance(b_outer.index, DeclRef) or b_outer.index.name != k_name:
+        return None
+    if not isinstance(b_term.index, DeclRef) or b_term.index.name != j_name:
+        return None
+
+    return MatMulOp(
+        dest=dest_name,
+        lhs=lhs_name,
+        rhs=rhs_name,
+        m=m,
+        n=n,
+        k=k_dim,
+        elem_bits=elem_bits,
+    )
+
+
+# =========================
 # Helper
 # =========================
 
@@ -517,7 +689,11 @@ def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
         # PASS 1: matching dei loop
         for stmt in func.body.stmts:
             if isinstance(stmt, ForStmt):
+                # Prima prova forma con accumulatore locale
                 matmul_op = _match_matmul_for(stmt, elem_bits)
+                if matmul_op is None:
+                    # Poi prova forma con accumulo diretto
+                    matmul_op = _match_matmul_for_direct(stmt, elem_bits)
                 if matmul_op is not None:
                     vec_func.ops.append(matmul_op)
                     continue
