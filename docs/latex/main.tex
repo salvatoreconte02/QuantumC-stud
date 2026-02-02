@@ -1,0 +1,105 @@
+%%
+%% Main file for HPQCI 2026 paper
+%% Extending QuantumC with Vector/Matrix Support
+%%
+\documentclass[sigconf]{acmart}
+
+%% BibTeX command
+\AtBeginDocument{%
+  \providecommand\BibTeX{{Bib\TeX}}}
+
+%% Rights management - DA AGGIORNARE con i dati ufficiali
+\setcopyright{acmlicensed}
+\copyrightyear{2026}
+\acmYear{2026}
+\acmDOI{XXXXXXX.XXXXXXX}
+
+%% Conference info - DA AGGIORNARE
+\acmConference[HPQCI '26]{Workshop on High-Performance Quantum Computing Integration}{2026}{TBD}
+\acmISBN{978-1-4503-XXXX-X/2026/XX}
+
+%%
+%% Packages aggiuntivi
+%%
+\usepackage{booktabs}    % Per tabelle professionali
+\usepackage{graphicx}    % Per figure
+\usepackage{listings}    % Per codice
+\usepackage{xcolor}      % Per colori nel codice
+
+%% Configurazione listings per codice C
+\lstdefinestyle{cstyle}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    numbers=left,
+    numberstyle=\tiny,
+    frame=single,
+    breaklines=true
+}
+
+%%
+%% Inizio documento
+%%
+\begin{document}
+
+%% Titolo
+\title{Extending QuantumC with Vector and Matrix Support}
+
+%% Autori - DA COMPLETARE con affiliazioni corrette
+\author{Salvatore Conte}
+\affiliation{%
+  \institution{Politecnico di Milano}
+  \city{Milano}
+  \country{Italy}}
+\email{salvatore.conte@mail.polimi.it}
+
+%% TODO: Aggiungere altri autori (tutor, supervisori)
+
+%% Short authors per header
+\renewcommand{\shortauthors}{Conte et al.}
+
+%% Abstract
+\input{sections/abstract}
+
+%% CCS Concepts - DA GENERARE su https://dl.acm.org/ccs/ccs.cfm
+\begin{CCSXML}
+<ccs2012>
+ <concept>
+  <concept_id>10010147.10010178</concept_id>
+  <concept_desc>Computing methodologies~Quantum computing</concept_desc>
+  <concept_significance>500</concept_significance>
+ </concept>
+ <concept>
+  <concept_id>10011007.10011006.10011008.10011009.10011012</concept_id>
+  <concept_desc>Software and its engineering~Source code generation</concept_desc>
+  <concept_significance>300</concept_significance>
+ </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Computing methodologies~Quantum computing}
+\ccsdesc[300]{Software and its engineering~Source code generation}
+
+%% Keywords
+\keywords{quantum computing, compiler, MLIR, vector operations, matrix operations, C language}
+
+\maketitle
+
+%% Sezioni del paper
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/experimental}
+\input{sections/results}
+\input{sections/conclusion}
+
+%% Acknowledgments
+\begin{acks}
+% TODO: Aggiungere ringraziamenti (tutor, progetto, finanziamenti)
+\end{acks}
+
+%% Bibliografia
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

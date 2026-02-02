@@ -1,0 +1,95 @@
+%%
+%% Results and Discussion
+%%
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Experimental Setup}
+\label{sec:setup}
+
+% TODO: Completare con versioni effettive e hardware
+
+We evaluate the extended QuantumC compiler using the following setup:
+\begin{itemize}
+    \item \textbf{Frontend}: Clang (for C parsing)
+    \item \textbf{MLIR framework}: xDSL~\cite{xdsl}
+    \item \textbf{Quantum backend}: Qiskit~\cite{qiskit}
+    \item \textbf{Hardware}: % TODO: specs macchina
+\end{itemize}
+
+The benchmark suite includes scalar, vector, matrix, and hybrid test programs from the project's test directory.
+
+\subsection{Vector/Matrix Compilation Results}
+\label{sec:vecmat-results}
+
+% TODO: Tabella con risultati compilazione
+
+Table~\ref{tab:compilation} shows the compilation results for representative vector and matrix benchmarks.
+
+\begin{table}[h]
+  \caption{Compilation Results for Vector/Matrix Benchmarks}
+  \label{tab:compilation}
+  \begin{tabular}{lrrr}
+    \toprule
+    Benchmark & Qubits & Depth & Gates \\
+    \midrule
+    vec\_add (N=4) & -- & -- & -- \\
+    vec\_dot (N=4) & -- & -- & -- \\
+    matmul (2x2) & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% TODO: Commentare risultati
+
+\subsection{Arithmetic Backend Comparison}
+\label{sec:backend-comparison}
+
+% IMPORTANTE: confronto a livello di gate logici, NON Clifford+T
+
+We compare the QFT-based and ripple-carry arithmetic backends using structural circuit metrics at the logical gate level. Table~\ref{tab:backend} presents the comparison across different benchmarks.
+
+\begin{table*}[h]
+  \caption{Comparison of QFT and Ripple-Carry Backends (Structural Metrics)}
+  \label{tab:backend}
+  \begin{tabular}{lrrrrrrrr}
+    \toprule
+    & \multicolumn{4}{c}{QFT Backend} & \multicolumn{4}{c}{Ripple-Carry Backend} \\
+    \cmidrule(lr){2-5} \cmidrule(lr){6-9}
+    Benchmark & Qubits & Depth & CX & Phase & Qubits & Depth & CX & T \\
+    \midrule
+    add (4-bit) & -- & -- & -- & -- & -- & -- & -- & -- \\
+    mul (4-bit) & -- & -- & -- & -- & -- & -- & -- & -- \\
+    vec\_add & -- & -- & -- & -- & -- & -- & -- & -- \\
+    vec\_dot & -- & -- & -- & -- & -- & -- & -- & -- \\
+    matmul & -- & -- & -- & -- & -- & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+% TODO: Generare dati con: python3 pipeline.py <file> --adder both --bits 4
+
+\subsection{Discussion}
+\label{sec:discussion}
+
+% TODO: Interpretazione risultati
+
+The experimental results reveal clear trade-offs between the two arithmetic backends:
+
+\textbf{QFT-based backend}:
+\begin{itemize}
+    \item Fewer qubits (no explicit carry qubits)
+    \item Generally shallower circuits
+    \item Relies on controlled phase rotation gates
+\end{itemize}
+
+\textbf{Ripple-carry backend}:
+\begin{itemize}
+    \item Additional qubits required for carry propagation
+    \item Deeper circuits due to sequential carry chain
+    \item Uses CNOT and Toffoli (T) gates
+\end{itemize}
+
+The choice of backend depends on the target quantum hardware. Systems with high-fidelity rotation gates may favor QFT-based arithmetic, while systems with efficient Toffoli implementations may prefer ripple-carry.
+
+% TODO: Aggiungere considerazioni su limitazioni

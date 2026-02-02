@@ -1,0 +1,39 @@
+%%
+%% Conclusions
+%%
+\section{Conclusions}
+\label{sec:conclusion}
+
+% TODO: Completare
+
+We have presented an extension to QuantumC that enables the compilation of C programs with vector and matrix operations into quantum circuits. Our approach introduces pattern-based recognition for common linear algebra operations and integrates dedicated intermediate representations into the existing MLIR-based pipeline.
+
+The main contributions of this work include:
+\begin{itemize}
+    \item Pattern recognition for vector addition, dot product, and matrix multiplication
+    \item VecMat and QAR intermediate representations for vector/matrix operations
+    \item Support for hybrid programs combining scalar and vector/matrix code
+    \item Compile-time array initialization
+    \item Comparative analysis of QFT and ripple-carry arithmetic backends
+\end{itemize}
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+The current implementation has several limitations:
+\begin{itemize}
+    \item Only three vector/matrix patterns are supported (vec\_add, vec\_dot, matmul)
+    \item Array dimensions must be known at compile time
+    \item The backend comparison uses structural circuit metrics at the logical gate level
+\end{itemize}
+
+\subsection{Future Work}
+\label{sec:future}
+
+Future directions include:
+\begin{itemize}
+    \item Supporting additional patterns (convolution, transpose, etc.)
+    \item Circuit-level optimizations
+    \item Integration with additional quantum backends
+    \item Fault-tolerant analysis with gate decomposition
+\end{itemize}

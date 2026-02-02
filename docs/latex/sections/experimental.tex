@@ -1,0 +1,109 @@
+%%
+%% Extended Compilation Pipeline
+%%
+\section{Extended Compilation Pipeline}
+\label{sec:pipeline}
+
+\subsection{Architecture Overview}
+\label{sec:architecture}
+
+% TODO: Figura della pipeline estesa
+
+Figure~\ref{fig:pipeline} shows the extended compilation pipeline. When the source code contains recognized vector or matrix patterns, a parallel compilation path is activated alongside the standard scalar path.
+
+% TODO: Inserire figura
+% \begin{figure}[h]
+%   \centering
+%   \includegraphics[width=\linewidth]{figures/pipeline}
+%   \caption{Extended QuantumC compilation pipeline with vector/matrix support.}
+%   \Description{Diagram showing the compilation pipeline with scalar and vector/matrix paths.}
+%   \label{fig:pipeline}
+% \end{figure}
+
+The extended pipeline adds the following stages:
+\begin{enumerate}
+    \item \textbf{Pattern Recognition}: Identifies vector/matrix operations in the AST
+    \item \textbf{VecMat IR}: Represents operations at a high abstraction level
+    \item \textbf{QAR (Quantum Arithmetic Representation)}: Lowers to quantum arithmetic operations
+    \item \textbf{Merge}: Combines scalar and vector/matrix quantum representations
+\end{enumerate}
+
+\subsection{Pattern Recognition}
+\label{sec:pattern-recognition}
+
+% TODO: Come vengono riconosciuti i pattern
+
+The pattern recognition phase analyzes the C AST to identify common vector and matrix computation patterns. Table~\ref{tab:patterns} summarizes the supported patterns.
+
+\begin{table}[h]
+  \caption{Supported Vector/Matrix Patterns}
+  \label{tab:patterns}
+  \begin{tabular}{lll}
+    \toprule
+    Pattern & C Code & Structure \\
+    \midrule
+    vec\_add & \texttt{c[i] = a[i] + b[i]} & Single loop \\
+    vec\_dot & \texttt{s += a[i] * b[i]} & Single loop, accumulator \\
+    matmul & \texttt{C[i][j] += A[i][k] * B[k][j]} & Triple nested loop \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The recognition algorithm traverses the AST looking for \texttt{for} loops with specific body structures:
+\begin{itemize}
+    \item Array subscript expressions with the loop variable as index
+    \item Binary operations matching the expected computation
+    \item Consistent array dimensions across operands
+\end{itemize}
+
+\subsection{VecMat Intermediate Representation}
+\label{sec:vecmat-ir}
+
+% TODO: Descrivere vecmat_ir.py
+
+The VecMat IR provides a high-level representation of vector and matrix operations. It captures:
+\begin{itemize}
+    \item Operation type (VecAdd, VecDot, MatMul)
+    \item Array dimensions and element bitwidth
+    \item Input and output register names
+    \item Constant initialization values (when applicable)
+\end{itemize}
+
+This representation abstracts away the loop structure while preserving the semantic meaning of the computation.
+
+\subsection{Quantum Arithmetic Representation (QAR)}
+\label{sec:qar}
+
+% TODO: Descrivere qar_ir.py e vecmat_to_qar.py
+
+The QAR layer lowers VecMat operations into sequences of quantum arithmetic primitives. For example, a vector addition of length $N$ is decomposed into $N$ independent quantum additions.
+
+The QAR provides a uniform interface for the subsequent quantum code generation, regardless of whether operations originated from scalar or vector/matrix code paths.
+
+\subsection{Hybrid Compilation}
+\label{sec:hybrid}
+
+% TODO: Descrivere merge
+
+Programs may contain both scalar and vector/matrix operations. The compilation pipeline handles these hybrid programs by:
+\begin{enumerate}
+    \item Processing scalar code through the standard QuantumC path
+    \item Processing vector/matrix code through the extended path
+    \item Merging the resulting quantum representations using a \texttt{result\_map} that tracks register assignments
+\end{enumerate}
+
+The merge phase ensures that quantum registers are correctly shared between the two paths when operations have data dependencies.
+
+\subsection{Compile-time Array Initialization}
+\label{sec:array-init}
+
+% TODO: Supporto per inizializzazione array
+
+The extended compiler supports compile-time initialization of arrays:
+
+\begin{lstlisting}[style=cstyle]
+int a[4] = {1, 2, 3, 4};
+int A[2][2] = {{1, 2}, {3, 4}};
+\end{lstlisting}
+
+Constant values are propagated through the compilation pipeline and encoded into the initial quantum state using X gates on the appropriate qubits.

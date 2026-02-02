@@ -1,0 +1,62 @@
+%%
+%% Background
+%%
+\section{Background}
+\label{sec:background}
+
+\subsection{QuantumC Overview}
+\label{sec:quantumc-overview}
+
+% TODO: Riassunto breve del paper originale:
+% - Pipeline 5 stadi: C -> AST -> Dataclasses -> Classical MLIR -> Quantum MLIR -> QASM
+% - Supporto: variabili scalari, aritmetica, if/else, for loops
+% - Limitazioni: solo operazioni scalari, no array/vector/matrix
+
+QuantumC~\cite{quantumc} is an MLIR-based compiler that translates C programs into quantum circuits. The compilation proceeds through five stages:
+
+\begin{enumerate}
+    \item \textbf{C to JSON AST}: The C source is parsed using Clang to produce a JSON abstract syntax tree.
+    \item \textbf{AST to Dataclasses}: The JSON AST is converted into Python dataclass representations.
+    \item \textbf{Dataclasses to Classical MLIR}: An SSA-form classical MLIR representation is generated using xDSL~\cite{xdsl}.
+    \item \textbf{Classical to Quantum MLIR}: Classical operations are translated into quantum operations using QFT-based arithmetic.
+    \item \textbf{Quantum MLIR to QASM}: The quantum MLIR is lowered to a Qiskit circuit and exported as OpenQASM.
+\end{enumerate}
+
+The original QuantumC supports scalar integer variables, arithmetic operations (+, -, *, /), comparisons, and control flow (if/else, for loops with static unrolling). However, it does not support array operations or vector/matrix computations.
+
+\subsection{Vector and Matrix Operations}
+\label{sec:vecmat-operations}
+
+% TODO: Operazioni target:
+% - Vector addition: c[i] = a[i] + b[i]
+% - Dot product: s += a[i] * b[i]
+% - Matrix multiplication: C[i][j] += A[i][k] * B[k][j]
+% - Perche sono importanti per quantum computing (quantum ML, HHL, etc.)
+
+Linear algebra operations form the computational core of many applications relevant to quantum computing, including quantum machine learning and algorithms such as HHL for solving linear systems~\cite{nielsen-chuang}.
+
+The operations we target in this extension are:
+
+\begin{itemize}
+    \item \textbf{Vector addition}: $c_i = a_i + b_i$ for $i = 0, \ldots, N-1$
+    \item \textbf{Dot product}: $s = \sum_{i=0}^{N-1} a_i \cdot b_i$
+    \item \textbf{Matrix multiplication}: $C_{ij} = \sum_{k=0}^{K-1} A_{ik} \cdot B_{kj}$
+\end{itemize}
+
+These operations are expressed in C using standard loop patterns with array indexing.
+
+\subsection{Quantum Arithmetic Implementations}
+\label{sec:quantum-arithmetic}
+
+% TODO: Due approcci:
+% - QFT-based: usa Quantum Fourier Transform, meno qubit, rotazioni di fase
+% - Ripple-carry: stile classico con carry propagation, piu gate ma diversa struttura
+% - Trade-off tra i due
+
+Two main approaches exist for implementing arithmetic operations on quantum computers:
+
+\textbf{QFT-based arithmetic}~\cite{draper-qft,sahin-qft} leverages the Quantum Fourier Transform to perform addition in the Fourier basis. This approach requires fewer qubits since it does not need explicit carry qubits, but relies on controlled phase rotations.
+
+\textbf{Ripple-carry arithmetic}~\cite{cuccaro-ripple} follows the classical carry-propagation model, using Toffoli and CNOT gates to propagate carry bits through the addition. This approach requires additional ancilla qubits for carries but uses a different gate set.
+
+The trade-off between these approaches depends on the target hardware characteristics, such as native gate sets, qubit connectivity, and error rates. Our extended compiler supports both backends, enabling comparative analysis.

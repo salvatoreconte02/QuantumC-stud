@@ -1,0 +1,6 @@
+%%
+%% Abstract - COMPLETATO
+%%
+\begin{abstract}
+Modern quantum workloads are increasingly driven by linear algebra--centric applications, such as machine learning and data processing, which naturally rely on vector and matrix computations. However, existing high-level quantum compilers primarily target scalar arithmetic, limiting their expressiveness and applicability to these emerging domains. In this work, we extend QuantumC to support the compilation of C programs featuring vector and matrix operations into quantum circuits. Our approach introduces pattern-based recognition of common vector and matrix computations and integrates a dedicated intermediate representation into the existing QuantumC pipeline, while preserving compatibility with scalar code and hybrid programs. The extended compiler supports compile-time initialization of vector and matrix data and produces a unified quantum circuit representation. As an analysis enabled by this extension, we compare two alternative arithmetic backends---QFT-based and ripple-carry adders---using structural circuit metrics such as qubit count, circuit depth, and gate composition. Experimental results on vector and matrix benchmarks highlight clear trade-offs between the two approaches.
+\end{abstract}

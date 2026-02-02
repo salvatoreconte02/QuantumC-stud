@@ -4,6 +4,30 @@ Documento guida per la stesura del paper. Struttura basata sul paper QuantumC or
 
 ---
 
+## Note dal Tutor
+
+1. **File separati per sezione** → usare `\input{sezione}` nel main
+2. **Tabelle e grafici in LaTeX** (no screenshot)
+3. **Immagini in LaTeX** se possibile
+
+### Struttura file LaTeX suggerita:
+```
+docs/latex/
+├── main.tex              # File principale con \input
+├── sections/
+│   ├── abstract.tex
+│   ├── introduction.tex  # include related work + contributions
+│   ├── background.tex
+│   ├── experimental.tex  # o "pipeline.tex"
+│   ├── results.tex
+│   └── conclusion.tex
+├── figures/
+│   └── pipeline.pdf      # diagrammi
+└── references.bib
+```
+
+---
+
 ## 1. Abstract
 
 **STATUS: COMPLETATO**
