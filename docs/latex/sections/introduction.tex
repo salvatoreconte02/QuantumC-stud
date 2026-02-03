@@ -4,56 +4,16 @@
 \section{Introduction}
 \label{sec:introduction}
 
-% TODO: Motivazione (1-2 paragrafi)
-% - Quantum computing si sta muovendo verso applicazioni reali
-% - ML e data processing sono workload chiave -> richiedono operazioni vector/matrix
-% - I compilatori quantum attuali supportano solo aritmetica scalare
-% - Gap da colmare: permettere agli sviluppatori di scrivere codice C con vector/matrix
+Quantum computing is rapidly evolving from theoretical exploration toward practical applications. Among the most promising use cases are machine learning and data processing workloads, which fundamentally rely on vector and matrix computations---the core building blocks of linear algebra. Algorithms such as HHL for linear systems~\cite{hhl} and quantum machine learning models leverage these operations to achieve potential speedups over classical approaches. As quantum hardware matures and error-correction techniques improve, the ability to express and compile such computations efficiently becomes increasingly important.
 
-Quantum computing is rapidly evolving from theoretical exploration toward practical applications. Among the most promising use cases are machine learning and data processing workloads, which fundamentally rely on vector and matrix computations. However, current high-level quantum compilers primarily support scalar integer arithmetic, leaving a significant gap in expressiveness for developers who wish to leverage quantum speedups for linear algebra operations.
+However, current high-level quantum compilers primarily support scalar integer arithmetic, leaving a significant gap in expressiveness for developers who wish to leverage quantum computing for linear algebra workloads. While these compilers successfully demonstrate the feasibility of translating classical code into quantum circuits, they cannot directly handle the vector and matrix operations that dominate modern computational workloads. This limitation forces developers to either manually decompose their algorithms into scalar operations or abandon high-level compilation altogether.
 
-% Citare paper rilevanti per quantum ML
+\textbf{Related Work.} QuantumC~\cite{quantumc} introduced an MLIR-based compilation pipeline that translates C programs with scalar integer operations into quantum circuits expressed in OpenQASM. While this approach successfully demonstrates the feasibility of high-level quantum compilation from standard C, it is limited to scalar arithmetic and does not support array, vector, or matrix operations. QHLS~\cite{qhls} explores a similar C-to-quantum synthesis approach but relies on ad-hoc transformations instead of MLIR, which limits its modularity and optimization potential. In contrast, our work extends QuantumC to support vector and matrix operations while leveraging the MLIR infrastructure for modular dialect design.
 
-\subsection{Related Work}
-\label{sec:related}
+\textbf{This Work.} We extend QuantumC to support vector and matrix operations while maintaining full compatibility with existing scalar code. Our extension introduces pattern-based recognition for common linear algebra operations---vector addition, dot product, and matrix multiplication---directly from the C source AST. These patterns are identified through structural analysis of loop constructs and array access patterns, enabling the compiler to capture high-level semantics that would otherwise be lost through naive loop unrolling.
 
-% TODO: Citare e differenziarsi da:
-% - QuantumC originale (Lancellotti et al.) - solo scalare
-% - QHLS (Lu et al.) - approccio diverso, no MLIR
-% - Altri lavori su quantum linear algebra
+To represent and transform these operations, we introduce two dedicated intermediate representations integrated into the existing MLIR pipeline. The \emph{VecMat IR} captures vector and matrix operations at a high level of abstraction, while the \emph{QAR (Quantum Arithmetic Representation)} expresses arithmetic operations in a form suitable for quantum circuit generation. The extended compiler supports hybrid programs that combine scalar and vector/matrix operations, automatically merging the separate compilation paths into a unified quantum circuit. Additionally, compile-time initialization of vector and matrix data is supported, allowing constant arrays to be directly encoded in the generated circuit. As an analysis enabled by this extension, we compare two alternative arithmetic backends---QFT-based and ripple-carry adders---using structural circuit metrics.
 
-QuantumC~\cite{quantumc} introduced an MLIR-based compilation pipeline that translates C programs with scalar integer operations into quantum circuits expressed in OpenQASM. While this approach successfully demonstrates the feasibility of high-level quantum compilation, it is limited to scalar arithmetic and does not support array or matrix operations.
+\textbf{Contributions.} This work makes several contributions to the field of high-level quantum compilation. We introduce pattern-based recognition of vector and matrix operations directly from C source code, enabling the compiler to identify common linear algebra computations such as vector addition, dot product, and matrix multiplication. To represent these operations throughout the compilation process, we design two dedicated intermediate representations---VecMat IR and QAR---that integrate seamlessly into the existing MLIR pipeline. Our extended compiler supports hybrid programs that combine scalar and vector/matrix operations, with compile-time initialization of array data. Finally, we present a comparative analysis of two arithmetic backends, QFT-based and ripple-carry adders, using structural circuit metrics to highlight their respective trade-offs.
 
-Other approaches such as QHLS~\cite{qhls} explore high-level synthesis for quantum circuits but follow different architectural choices and do not leverage MLIR's multi-level representation capabilities.
-
-\subsection{This Work}
-\label{sec:thiswork}
-
-% TODO: Descrivere cosa fa l'estensione:
-% - Estende QuantumC con supporto vector/matrix
-% - Pattern recognition per operazioni comuni (vec_add, vec_dot, matmul)
-% - IR dedicata (VecMat) integrata nella pipeline esistente
-% - Supporto per programmi ibridi (scalare + vector/matrix)
-% - Inizializzazione compile-time di array
-
-In this work, we extend QuantumC to support vector and matrix operations while maintaining full compatibility with existing scalar code. Our extension introduces pattern-based recognition for common linear algebra operations---vector addition, dot product, and matrix multiplication---and integrates dedicated intermediate representations into the existing compilation pipeline.
-
-The extended compiler supports hybrid programs that combine scalar and vector/matrix operations, as well as compile-time initialization of array data structures.
-
-\subsection{Contributions}
-\label{sec:contributions}
-
-The main contributions of this paper are:
-
-\begin{itemize}
-    \item Pattern-based recognition of vector and matrix operations in C source code
-    \item VecMat IR and QAR (Quantum Arithmetic Representation) intermediate representations
-    \item Hybrid compilation supporting mixed scalar and vector/matrix programs
-    \item Compile-time array initialization for vectors and matrices
-    \item Comparative analysis of QFT-based and ripple-carry arithmetic backends using structural circuit metrics
-\end{itemize}
-
-\subsection{Paper Structure}
-\label{sec:structure}
-
-The remainder of this paper is organized as follows. Section~\ref{sec:background} provides background on QuantumC and quantum arithmetic implementations. Section~\ref{sec:pipeline} describes our extended compilation pipeline. Section~\ref{sec:results} presents experimental results and the backend comparison. Section~\ref{sec:conclusion} concludes and discusses future work.
+\textbf{Structure of the paper.} The remainder of this paper is organized as follows. Section~\ref{sec:background} provides background on QuantumC and quantum arithmetic implementations. Section~\ref{sec:pipeline} describes our extended compilation pipeline, including pattern recognition and the VecMat/QAR intermediate representations. Section~\ref{sec:results} presents experimental results on vector and matrix benchmarks and the arithmetic backend comparison. Section~\ref{sec:conclusion} concludes and discusses future work.
