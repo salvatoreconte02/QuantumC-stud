@@ -159,3 +159,34 @@ Two backends available (`step5_quantum_mlir_to_qasm/`):
 
 - **NEVER reference Claude in commit messages** (no Co-Authored-By, no mentions of AI assistance)
 - Write commit messages in Italian or English, describing what was changed and why
+
+## Paper Writing
+
+Quando si lavora sul paper, fare riferimento a:
+- `docs/paper/paper_guide.md` - struttura, decisioni prese, e note sulla coerenza
+- `docs/paper/QuantumC_SAC 2 (1).pdf` - paper originale QuantumC come riferimento per lo stile
+
+**Target venue:** HPQCI 2026 (Workshop on High-Performance Quantum Computing Integration)
+
+**IMPORTANTE:** Quando si completa una sezione del paper, aggiornare `docs/paper/paper_guide.md` con:
+1. Cambiare STATUS da "DA FARE" a "COMPLETATO"
+2. Sostituire la struttura suggerita con il **testo completo** della sezione (in inglese, senza LaTeX)
+3. Elencare le citazioni usate
+
+### Struttura LaTeX (`docs/latex/`)
+
+```
+docs/latex/
+├── main.tex              # File principale (compila questo)
+├── references.bib        # Bibliografia
+├── figures/              # Cartella per immagini/diagrammi
+└── sections/
+    ├── abstract.tex      # Abstract (completato)
+    ├── introduction.tex  # Intro + Related Work + Contributions
+    ├── background.tex    # QuantumC + Quantum Arithmetic
+    ├── experimental.tex  # Pipeline estesa
+    ├── results.tex       # Risultati e confronto backend
+    └── conclusion.tex    # Conclusioni + Future Work
+```
+
+Per compilare: `pdflatex main.tex && bibtex main && pdflatex main.tex && pdflatex main.tex`

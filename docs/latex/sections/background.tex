@@ -4,59 +4,37 @@
 \section{Background}
 \label{sec:background}
 
+This section introduces the foundational concepts of quantum computation relevant to our work, provides an overview of the QuantumC compiler that we extend, and describes the quantum arithmetic implementations that we compare.
+
+\subsection{Quantum Computing Preliminaries}
+\label{sec:quantum-preliminaries}
+
+In quantum computing, the fundamental unit of information is the \emph{qubit}, whose state is a superposition of two basis states: $|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$, where $\alpha$ and $\beta$ are complex amplitudes satisfying $|\alpha|^2 + |\beta|^2 = 1$~\cite{nielsen-chuang}. Multiple qubits can be grouped into \emph{quantum registers} to represent integer values, analogous to how classical variables are stored in processor registers.
+
+Quantum computation proceeds by applying \emph{quantum gates}, which are unitary operators that evolve the system state. In the circuit model, qubits are depicted as horizontal lines, gates as operations applied to one or more qubits, and computation flows from left to right. Common gates include single-qubit operations (X, H, phase rotations) and multi-qubit operations (CNOT, Toffoli).
+
+Two fundamental constraints distinguish quantum from classical computation. First, quantum operations are inherently \emph{reversible}: since gates are unitary, applying the adjoint $U^\dagger$ recovers the original state. This implies that variables cannot be directly overwritten; intermediate values must be preserved or explicitly uncomputed. Second, the \emph{no-cloning theorem} forbids duplicating arbitrary quantum states, eliminating the classical notion of fan-out for variable copying.
+
+These constraints have direct implications for compiling classical programs to quantum circuits. The reversibility requirement naturally aligns with Static Single Assignment (SSA) form, where each variable is assigned exactly once. The quality and cost of a quantum circuit are commonly evaluated using metrics such as \emph{qubit count} (width), \emph{circuit depth} (critical path length), and \emph{gate count}.
+
 \subsection{QuantumC Overview}
 \label{sec:quantumc-overview}
 
-% TODO: Riassunto breve del paper originale:
-% - Pipeline 5 stadi: C -> AST -> Dataclasses -> Classical MLIR -> Quantum MLIR -> QASM
-% - Supporto: variabili scalari, aritmetica, if/else, for loops
-% - Limitazioni: solo operazioni scalari, no array/vector/matrix
+QuantumC~\cite{quantumc} is an MLIR-based compiler that translates C programs into quantum circuits expressed in OpenQASM format. The compilation proceeds through five stages: (1)~the C source is parsed using Clang to produce a JSON abstract syntax tree; (2)~the AST is converted into Python dataclass representations; (3)~a classical MLIR module in SSA form is generated using xDSL~\cite{xdsl}; (4)~classical operations are translated into quantum operations; and (5)~the quantum MLIR is lowered to a Qiskit circuit and exported as OpenQASM.
 
-QuantumC~\cite{quantumc} is an MLIR-based compiler that translates C programs into quantum circuits. The compilation proceeds through five stages:
+The use of MLIR~\cite{mlir} provides a modular infrastructure with well-defined dialects and progressive lowering, enabling optimizations at multiple abstraction levels. The SSA form adopted in the classical MLIR stage ensures that each value is defined exactly once, which naturally preserves reversibility by preventing variable overwriting.
 
-\begin{enumerate}
-    \item \textbf{C to JSON AST}: The C source is parsed using Clang to produce a JSON abstract syntax tree.
-    \item \textbf{AST to Dataclasses}: The JSON AST is converted into Python dataclass representations.
-    \item \textbf{Dataclasses to Classical MLIR}: An SSA-form classical MLIR representation is generated using xDSL~\cite{xdsl}.
-    \item \textbf{Classical to Quantum MLIR}: Classical operations are translated into quantum operations using QFT-based arithmetic.
-    \item \textbf{Quantum MLIR to QASM}: The quantum MLIR is lowered to a Qiskit circuit and exported as OpenQASM.
-\end{enumerate}
+QuantumC supports scalar integer variables with configurable bitwidth, arithmetic operations (addition, subtraction, multiplication, division), comparison operators, and control flow constructs including conditional branches and for-loops with static unrolling. However, the current implementation focuses on scalar integer operations and does not directly support array declarations, vector operations, or matrix computations, limiting its applicability to linear algebra workloads that are central to quantum machine learning and algorithms such as HHL~\cite{hhl}.
 
-The original QuantumC supports scalar integer variables, arithmetic operations (+, -, *, /), comparisons, and control flow (if/else, for loops with static unrolling). However, it does not support array operations or vector/matrix computations.
-
-\subsection{Vector and Matrix Operations}
-\label{sec:vecmat-operations}
-
-% TODO: Operazioni target:
-% - Vector addition: c[i] = a[i] + b[i]
-% - Dot product: s += a[i] * b[i]
-% - Matrix multiplication: C[i][j] += A[i][k] * B[k][j]
-% - Perche sono importanti per quantum computing (quantum ML, HHL, etc.)
-
-Linear algebra operations form the computational core of many applications relevant to quantum computing, including quantum machine learning and algorithms such as HHL for solving linear systems~\cite{nielsen-chuang}.
-
-The operations we target in this extension are:
-
-\begin{itemize}
-    \item \textbf{Vector addition}: $c_i = a_i + b_i$ for $i = 0, \ldots, N-1$
-    \item \textbf{Dot product}: $s = \sum_{i=0}^{N-1} a_i \cdot b_i$
-    \item \textbf{Matrix multiplication}: $C_{ij} = \sum_{k=0}^{K-1} A_{ik} \cdot B_{kj}$
-\end{itemize}
-
-These operations are expressed in C using standard loop patterns with array indexing.
-
-\subsection{Quantum Arithmetic Implementations}
+\subsection{Quantum Arithmetic}
 \label{sec:quantum-arithmetic}
 
-% TODO: Due approcci:
-% - QFT-based: usa Quantum Fourier Transform, meno qubit, rotazioni di fase
-% - Ripple-carry: stile classico con carry propagation, piu gate ma diversa struttura
-% - Trade-off tra i due
+Arithmetic operations are fundamental building blocks in the compilation of classical programs to quantum circuits. Addition is the most basic operation, and two main approaches exist for its quantum implementation.
 
-Two main approaches exist for implementing arithmetic operations on quantum computers:
+\textbf{QFT-based addition.} The approach introduced by Draper~\cite{draper-qft} performs addition in the Fourier basis. The target register is first transformed via the Quantum Fourier Transform (QFT), then the addend is incorporated through controlled phase rotations, and finally the inverse QFT is applied to return to the computational basis. This method does not require ancilla qubits for carry propagation, as the carry information is encoded in the phase of the quantum state.
 
-\textbf{QFT-based arithmetic}~\cite{draper-qft,sahin-qft} leverages the Quantum Fourier Transform to perform addition in the Fourier basis. This approach requires fewer qubits since it does not need explicit carry qubits, but relies on controlled phase rotations.
+\textbf{Ripple-carry addition.} The approach proposed by Cuccaro et al.~\cite{cuccaro-ripple} follows the classical model of carry propagation. It uses a sequence of majority and unmajority gates, implemented with Toffoli (CCX) and CNOT gates, to propagate the carry bit through the register. This method requires ancilla qubits to store intermediate carry values but operates entirely in the computational basis without requiring the QFT.
 
-\textbf{Ripple-carry arithmetic}~\cite{cuccaro-ripple} follows the classical carry-propagation model, using Toffoli and CNOT gates to propagate carry bits through the addition. This approach requires additional ancilla qubits for carries but uses a different gate set.
+Other arithmetic operations in our compilation flow are built upon addition. Subtraction is performed via two's complement negation followed by addition. Multiplication can be implemented through repeated additions (shift-and-add) or using QFT-based techniques with controlled-controlled phase rotations.
 
-The trade-off between these approaches depends on the target hardware characteristics, such as native gate sets, qubit connectivity, and error rates. Our extended compiler supports both backends, enabling comparative analysis.
+The two addition approaches present different trade-offs in terms of qubit count, circuit depth, and gate composition. These trade-offs depend on the target hardware characteristics, such as native gate sets and qubit connectivity. Our extended compiler supports both backends, and we present a comparative analysis in Section~\ref{sec:results}.
