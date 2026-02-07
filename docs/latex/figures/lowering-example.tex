@@ -1,0 +1,83 @@
+% Figura: Lowering Example - Da C a Quantum Operations
+% Includere con: \input{figures/lowering-example}
+% Richiede: \usepackage{tikz}
+
+\begin{figure}[!htb]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+    box/.style={
+        draw,
+        rounded corners=2pt,
+        minimum width=2.4cm,
+        align=left,
+        font=\ttfamily\tiny,
+        inner sep=3pt
+    },
+    header/.style={
+        font=\sffamily\scriptsize\bfseries,
+        minimum width=2.4cm,
+        align=center
+    },
+    arrow/.style={
+        ->,
+        >=stealth,
+        thick
+    }
+]
+
+% Colonna 1: C Source
+\node[header] (h1) at (0, 0) {C Source};
+\node[box, below=0.2cm of h1, text width=2.2cm] (c1) {
+int a[2]=\{1,2\};\\
+int b[2]=\{3,4\};\\
+int c[2];\\
+for(i=0;i<2;i++)\\
+\ c[i]=a[i]+b[i];
+};
+
+% Colonna 2: VecMat IR
+\node[header] (h2) at (3, 0) {VecMat IR};
+\node[box, below=0.2cm of h2, text width=2.2cm] (c2) {
+VecAdd \{\\
+\ dest: "c"\\
+\ lhs: "a"\\
+\ rhs: "b"\\
+\ length: 2\\
+\}
+};
+
+% Colonna 3: QAR
+\node[header] (h3) at (6, 0) {QAR};
+\node[box, below=0.2cm of h3, text width=2.2cm] (c3) {
+QarMapAdd \{\\
+\ dest: "c"\\
+\ lhs: "a"\\
+\ rhs: "b"\\
+\ length: 2\\
+\}
+};
+
+% Colonna 4: Quantum Ops
+\node[header] (h4) at (9, 0) {Quantum Ops};
+\node[box, below=0.2cm of h4, text width=2.2cm] (c4) {
+\%a0 = q.init 1\\
+\%a1 = q.init 2\\
+\%b0 = q.init 3\\
+\%b1 = q.init 4\\
+\%c0 = q.init 0\\
+\%c1 = q.init 0\\
+\%c0' = q.addi \%a0,\%b0\\
+\%c1' = q.addi \%a1,\%b1
+};
+
+% Frecce
+\draw[arrow] (c1.east) -- (c2.west);
+\draw[arrow] (c2.east) -- (c3.west);
+\draw[arrow] (c3.east) -- (c4.west);
+
+\end{tikzpicture}%
+}
+\caption{Lowering of a vector addition from C source through VecMat IR and QAR to quantum operations.}
+\label{fig:lowering-example}
+\end{figure}

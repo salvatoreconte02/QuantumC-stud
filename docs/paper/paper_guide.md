@@ -92,77 +92,33 @@ The two addition approaches present different trade-offs in terms of qubit count
 
 ## 4. Extended Compilation Pipeline
 
-**STATUS: DA FARE**
+**STATUS: COMPLETATO**
 
-### Struttura suggerita:
+### Contenuto scritto:
 
-#### 4.1 Architecture Overview
-Figura della pipeline estesa:
-```
-C Source (con vector/matrix)
-    ↓
-[Stages 1-3] Pipeline QuantumC standard
-    ↓
-[Pattern Recognition] vecmat_lowering.py
-    ↓
-    ├── Scalar path (standard)
-    └── Vector/Matrix path (nuovo)
-            ↓
-        VecMat IR
-            ↓
-        QAR (Quantum Arithmetic Representation)
-            ↓
-        Quantum MLIR
-    ↓
-[Merge] Combinazione scalar + vector
-    ↓
-[Stage 5] QASM generation (con scelta backend)
-```
+La sezione descrive l'estensione della pipeline QuantumC per supportare operazioni vettoriali e matriciali. È strutturata in 5 sottosezioni:
 
-#### 4.2 Pattern Recognition
-Come vengono riconosciuti i pattern in `vecmat_lowering.py`:
-- Analisi AST per identificare loop structure
-- Pattern matching per vec_add, vec_dot, matmul
-- Estrazione dimensioni e operandi
+**3.1 (intro senza titolo):** Overview dell'architettura estesa. Spiega come i pattern riconosciuti vengono estratti dall'AST e processati attraverso un path dedicato (VecMat IR → QAR → Quantum Ops), mentre il codice scalare rimanente segue la pipeline standard. I due path convergono in una fase di merge.
 
-**Pattern supportati:**
-| Pattern | C Code | Riconoscimento |
-|---------|--------|----------------|
-| vec_add | `for(i) c[i] = a[i] + b[i]` | Loop singolo, accesso array indicizzato |
-| vec_dot | `for(i) s += a[i] * b[i]` | Loop singolo, accumulo scalare |
-| matmul | `for(i,j,k) C[i][j] += A[i][k] * B[k][j]` | Triple loop annidato |
+**3.1 Pattern Recognition:** Descrive come l'algoritmo analizza i loop `for` nell'AST cercando strutture specifiche. Condizioni di matching: header canonico (init=0, comparison vs bound, unit increment), array access con loop variable, struttura aritmetica attesa. Tabella con i 3 pattern supportati (vec_add, vec_dot, matmul).
 
-#### 4.3 VecMat Intermediate Representation
-Descrivere `vecmat_ir.py`:
-- Operazioni: VecAdd, VecDot, MatMul
-- Attributi: dimensioni, nomi registri, costanti
-- Come si integra con la pipeline
+**3.2 Intermediate Representations:**
+- **VecMat IR:** Operazioni VecAdd, VecDot, MatMul con attributi (dest, lhs, rhs, dimensions, elem_bits). Mantiene constant table per inizializzazioni compile-time.
+- **QAR:** Bridge tra VecMat e quantum ops. Mapping 1:1 (QarMapAdd, QarDot, QarMatMul). Propaga constant table.
+- **Example:** Figura che mostra C Source → VecMat IR → QAR → Quantum Ops per vector addition.
 
-#### 4.4 QAR (Quantum Arithmetic Representation)
-Descrivere `qar_ir.py` e `vecmat_to_qar.py`:
-- Rappresentazione intermedia per operazioni aritmetiche quantum
-- Lowering da VecMat a QAR
-- Mapping su operazioni quantum (add, mul, etc.)
+**3.3 Lowering to Quantum Operations:** Register allocation (N registri per vettore, M×N per matrice), inizializzazione con valori costanti o zero. Lowering delle 3 operazioni QAR a quantum.addi/muli. Result map per tracciare SSA values finali.
 
-#### 4.5 Hybrid Compilation
-Descrivere `_merge_scalar_and_vec_quantum` in `pipeline.py`:
-- Come vengono combinati i path scalare e vector
-- result_map per tracciare i registri
-- Gestione delle dipendenze
+**3.4 Hybrid Compilation:** Path separation, merge phase (inserimento init all'inizio, arithmetic prima del return, SSA remapping). Return value resolution tramite return hints e result map lookup.
 
-#### 4.6 Compile-time Array Initialization
-Supporto per:
-- `int a[4] = {1, 2, 3, 4};`
-- `int A[2][2] = {{1,2}, {3,4}};`
-- Come vengono gestiti a livello IR
+### Figure e Tabelle:
+- **Figura 1 (fig:pipeline):** Pipeline estesa - PLACEHOLDER da creare
+- **Figura 2 (fig:lowering-example):** Lowering example C→VecMat→QAR→Quantum - COMPLETATA (TikZ)
+- **Tabella 1 (tab:patterns):** Pattern supportati - COMPLETATA
 
-### File di riferimento per questa sezione:
-- `my_extensions/vecmat_lowering.py`
-- `my_extensions/vecmat_ir.py`
-- `my_extensions/qar_ir.py`
-- `my_extensions/vecmat_to_qar.py`
-- `my_extensions/qar_to_quantum_mlir.py`
-- `pipeline.py` (funzione `_merge_scalar_and_vec_quantum`)
+### File LaTeX:
+- `docs/latex/sections/experimental.tex`
+- `docs/latex/figures/lowering-example.tex`
 
 ---
 
