@@ -1,0 +1,74 @@
+% Figura: Extended Pipeline Architecture
+\begin{figure}[!htb]
+\centering
+\resizebox{0.85\columnwidth}{!}{%
+\begin{tikzpicture}[
+    box/.style={
+        draw,
+        rounded corners=3pt,
+        minimum width=2.2cm,
+        minimum height=0.7cm,
+        align=center,
+        font=\sffamily\scriptsize
+    },
+    mainbox/.style={box, fill=gray!10},
+    scalarbox/.style={box, fill=blue!10},
+    vecbox/.style={box, fill=green!10},
+    arrow/.style={->, >=stealth, thick}
+]
+
+% Coordinate assolute per controllo preciso
+% Riga 0: C Source
+\node[mainbox] (source) at (0, 0) {C Source};
+
+% Riga 1: Pattern Recognition
+\node[mainbox] (pattern) at (0, -1.2) {Pattern\\Recognition};
+
+% Riga 2: Branch - due path
+\node[scalarbox] (scalar) at (-2, -2.8) {Scalar Path\\(QuantumC)};
+\node[vecbox] (vecmat) at (2, -2.8) {VecMat IR};
+
+% Riga 3: Scalar -> Quantum MLIR, Vector -> QAR
+\node[scalarbox] (sqmlir) at (-2, -4.4) {Quantum MLIR};
+\node[vecbox] (qar) at (2, -4.4) {QAR};
+
+% Riga 4: Vector -> Quantum Ops (scalar path finito)
+\node[vecbox] (qops) at (2, -6.0) {Quantum Ops};
+
+% Riga 5: Merge (sotto entrambi i rami)
+\node[mainbox] (merge) at (0, -7.6) {Merge};
+
+% Riga 6: QASM Output
+\node[mainbox] (qasm) at (0, -9.0) {QASM Output};
+
+% === FRECCE ===
+
+% Top: source -> pattern
+\draw[arrow] (source) -- (pattern);
+
+% Branch: pattern -> scalar e pattern -> vecmat
+\draw[arrow] (pattern.south) -- ++(0, -0.4) -| (scalar.north);
+\draw[arrow] (pattern.south) -- ++(0, -0.4) -| (vecmat.north);
+
+% Scalar path: scalar -> sqmlir
+\draw[arrow] (scalar) -- (sqmlir);
+
+% Vector path: vecmat -> qar -> qops
+\draw[arrow] (vecmat) -- (qar);
+\draw[arrow] (qar) -- (qops);
+
+% Convergenza verso Merge
+% Da sqmlir: scende, poi va a destra verso merge.west
+\draw[arrow] (sqmlir.south) -- ++(0, -2.4) -| (merge.west);
+
+% Da qops: scende, poi va a sinistra verso merge.east
+\draw[arrow] (qops.south) -- ++(0, -0.8) -| (merge.east);
+
+% Bottom: merge -> qasm
+\draw[arrow] (merge) -- (qasm);
+
+\end{tikzpicture}%
+}
+\caption{Extended QuantumC compilation pipeline. Recognized vector and matrix patterns are processed through VecMat IR and QAR, while scalar code follows the standard path. Both merge into a unified quantum module.}
+\label{fig:pipeline}
+\end{figure}

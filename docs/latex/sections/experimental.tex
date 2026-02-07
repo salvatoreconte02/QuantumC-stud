@@ -15,15 +15,8 @@ The two paths converge in a \emph{merge phase} that combines their quantum repre
 This design enables \emph{hybrid compilation}: programs containing both scalar arithmetic and vector/matrix operations are compiled correctly, with each component processed through the most appropriate path.
 
 
-% Figura pipeline - posizionata qui per evitare che flotti nella sezione precedente
-\begin{figure}[!htb]
-  \centering
-  % \includegraphics[width=\linewidth]{figures/pipeline}
-  \fbox{\parbox{0.9\linewidth}{\centering\vspace{2cm}[Pipeline Figure Placeholder]\vspace{2cm}}}
-  \caption{Extended QuantumC compilation pipeline with vector/matrix support. Recognized patterns are extracted from the AST and processed through a dedicated path, then merged with the scalar compilation results.}
-  \Description{Diagram showing the extended compilation pipeline with pattern recognition, VecMat IR, QAR, and merge phases.}
-  \label{fig:pipeline}
-\end{figure}
+% Figura pipeline
+\input{figures/pipeline}
 
 
 \subsection{Pattern Recognition}
