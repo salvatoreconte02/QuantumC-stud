@@ -4,6 +4,9 @@
 \section{Extended Compilation Pipeline}
 \label{sec:pipeline}
 
+% Figura pipeline
+\input{figures/pipeline}
+
 The original QuantumC pipeline processes C programs through five sequential stages, from AST generation to OpenQASM output. Our extension augments this pipeline with a dedicated compilation path for vector and matrix operations, while preserving full compatibility with the existing scalar infrastructure.
 
 Figure~\ref{fig:pipeline} illustrates the extended architecture. The compilation begins with a \emph{pattern recognition} phase that analyzes the C abstract syntax tree to identify vector and matrix computation patterns. When such patterns are detected, they are extracted from the AST and processed through a dedicated \emph{vector/matrix path}, while the remaining scalar code follows the standard QuantumC pipeline.
@@ -13,11 +16,6 @@ In the vector/matrix path, recognized patterns are first represented in a high-l
 The two paths converge in a \emph{merge phase} that combines their quantum representations into a unified module. A \emph{result map} tracks the correspondence between high-level array elements and their quantum register assignments, ensuring that return statements and data dependencies are correctly resolved across the two paths.
 
 This design enables \emph{hybrid compilation}: programs containing both scalar arithmetic and vector/matrix operations are compiled correctly, with each component processed through the most appropriate path.
-
-
-% Figura pipeline
-\input{figures/pipeline}
-
 
 \subsection{Pattern Recognition}
 \label{sec:pattern-recognition}
