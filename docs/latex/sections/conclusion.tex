@@ -4,36 +4,28 @@
 \section{Conclusions}
 \label{sec:conclusion}
 
-% TODO: Completare
+We have extended QuantumC to support the compilation of C programs with vector and matrix operations into quantum circuits, introducing pattern-based recognition and dedicated intermediate representations integrated into the existing MLIR pipeline.
 
-We have presented an extension to QuantumC that enables the compilation of C programs with vector and matrix operations into quantum circuits. Our approach introduces pattern-based recognition for common linear algebra operations and integrates dedicated intermediate representations into the existing MLIR-based pipeline.
-
-The main contributions of this work include:
-\begin{itemize}
-    \item Pattern recognition for vector addition, dot product, and matrix multiplication
-    \item VecMat and QAR intermediate representations for vector/matrix operations
-    \item Support for hybrid programs combining scalar and vector/matrix code
-    \item Compile-time array initialization
-    \item Comparative analysis of QFT and ripple-carry arithmetic backends
-\end{itemize}
+The experimental evaluation demonstrates that this approach effectively preserves the inherent parallelism of vector operations. For vector addition, circuit depth remains constant regardless of vector size, while qubit count and gate count scale linearly. This is a direct consequence of recognizing vector addition as a single high-level operation rather than unrolling it into sequential scalar additions. In contrast, operations requiring accumulation into a shared result—such as dot product and matrix multiplication—exhibit significantly higher depth due to the unavoidable sequential dependencies in the computation. Additionally, the extended compiler enables comparative analysis of alternative arithmetic backends, revealing distinct trade-offs between QFT-based and ripple-carry implementations.
 
 \subsection{Limitations}
 \label{sec:limitations}
 
-The current implementation has several limitations:
-\begin{itemize}
-    \item Only three vector/matrix patterns are supported (vec\_add, vec\_dot, matmul)
-    \item Array dimensions must be known at compile time
-    \item The backend comparison uses structural circuit metrics at the logical gate level
-\end{itemize}
+The current implementation focuses on a well-defined subset of vector and matrix computations and, as a result, deliberately restricts the supported patterns and compilation scenarios. In particular, the pattern recognition phase targets three representative linear algebra kernels: element-wise vector addition, dot product, and matrix multiplication. While these patterns capture core building blocks of many workloads, other common operations—such as convolutions, transpositions, reductions beyond summation, or more general element-wise transformations—are not currently recognized and are instead lowered through scalar loop unrolling.
+
+Another limitation concerns data sizing. Vector and matrix dimensions must be statically known at compile time, as quantum register allocation and circuit generation require fixed sizes. Programs relying on dynamically sized arrays or runtime-dependent dimensions are therefore outside the scope of the current compilation flow.
+
+Regarding arithmetic backend evaluation, the comparison between QFT-based and ripple-carry implementations is conducted using structural circuit metrics at the logical gate level, including qubit count, circuit depth, and gate composition. While these metrics provide a meaningful and backend-agnostic view of circuit structure, they do not capture hardware-specific effects such as native gate availability, connectivity constraints, calibration errors, or fault-tolerant overheads. As a consequence, the comparison should be interpreted as an architectural and compiler-level analysis rather than a definitive performance assessment on concrete quantum devices.
+
+Finally, the observed advantages of one arithmetic backend over the other are influenced by the compilation context and the class of workloads considered. In particular, the comparison emphasizes addition- and subtraction-dominated computations arising from vector and matrix kernels. Different algorithmic structures or hardware assumptions may lead to different trade-offs, and extending the analysis to additional arithmetic primitives and backend configurations remains an open direction for future work.
 
 \subsection{Future Work}
 \label{sec:future}
 
-Future directions include:
-\begin{itemize}
-    \item Supporting additional patterns (convolution, transpose, etc.)
-    \item Circuit-level optimizations
-    \item Integration with additional quantum backends
-    \item Fault-tolerant analysis with gate decomposition
-\end{itemize}
+Several directions emerge naturally from the limitations discussed above. Extending the pattern recognition phase to support additional linear algebra operations—such as convolutions, matrix transpositions, reductions with alternative operators, and general element-wise transformations—would broaden the applicability of the compiler to a wider class of workloads. Similarly, relaxing the static sizing constraint to accommodate runtime-determined dimensions would require exploring hybrid classical-quantum compilation strategies or parameterized circuit generation.
+
+At the circuit level, optimization passes could reduce qubit count and circuit depth by exploiting algebraic identities, reusing ancilla qubits, or reordering operations to minimize critical path length. Such optimizations would complement the current focus on correct-by-construction lowering with efficiency-oriented transformations.
+
+Finally, extending the arithmetic backend analysis to include fault-tolerant considerations—such as gate decomposition costs, error correction overhead, and hardware-specific connectivity constraints—would provide a more complete picture of the practical trade-offs involved in backend selection. Integration with additional quantum backends beyond Qiskit would further enhance the compiler's flexibility and applicability across different quantum computing platforms.
+
+Overall, these directions aim to build upon the current foundation by expanding expressiveness, improving efficiency, and enabling more realistic evaluations, while preserving the modular and extensible design of the proposed compilation framework.
