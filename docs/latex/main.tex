@@ -1,6 +1,6 @@
 %%
 %% Main file for HPQCI 2026 paper
-%% Extending QuantumC with Vector/Matrix Support
+%% Compiling Linear Algebra Workloads from C to Quantum Circuits
 %%
 \documentclass[sigconf]{acmart}
 
@@ -48,30 +48,54 @@
 \begin{document}
 
 %% Titolo
-\title{Extending QuantumC with Vector and Matrix Support}
+\title{Compiling Linear Algebra Workloads from C to Quantum Circuits}
 
-%% Autori - DA COMPLETARE con affiliazioni corrette
-\author{Salvatore Conte}
+%% Autori
+\author{Salvatore Pio Conte}
 \affiliation{%
   \institution{Politecnico di Milano}
   \city{Milano}
   \country{Italy}}
-\email{salvatore.conte@mail.polimi.it}
+\email{salvatorepio.conte@mail.polimi.it}
 
-%% TODO: Aggiungere altri autori (tutor, supervisori)
+\author{Simone Cosenza}
+\affiliation{%
+  \institution{Politecnico di Milano}
+  \city{Milano}
+  \country{Italy}}
+\email{simone.cosenza@mail.polimi.it}
+
+\author{Giacomo Lancellotti}
+\affiliation{%
+  \institution{Politecnico di Milano}
+  \city{Milano}
+  \country{Italy}}
+\email{giacomo.lancellotti@polimi.it}
+
+\author{Giovanni Agosta}
+\affiliation{%
+  \institution{Politecnico di Milano}
+  \city{Milano}
+  \country{Italy}}
+\email{giovanni.agosta@polimi.it}
 
 %% Short authors per header
-\renewcommand{\shortauthors}{Conte et al.}
+\renewcommand{\shortauthors}{Conte and Cosenza et al.}
 
 %% Abstract
 \input{sections/abstract}
 
-%% CCS Concepts - DA GENERARE su https://dl.acm.org/ccs/ccs.cfm
+%% CCS Concepts
 \begin{CCSXML}
 <ccs2012>
  <concept>
   <concept_id>10010147.10010178</concept_id>
   <concept_desc>Computing methodologies~Quantum computing</concept_desc>
+  <concept_significance>500</concept_significance>
+ </concept>
+ <concept>
+  <concept_id>10011007.10011006.10011008.10011009</concept_id>
+  <concept_desc>Software and its engineering~Compilers</concept_desc>
   <concept_significance>500</concept_significance>
  </concept>
  <concept>
@@ -83,10 +107,11 @@
 \end{CCSXML}
 
 \ccsdesc[500]{Computing methodologies~Quantum computing}
+\ccsdesc[500]{Software and its engineering~Compilers}
 \ccsdesc[300]{Software and its engineering~Source code generation}
 
 %% Keywords
-\keywords{quantum computing, compiler, MLIR, vector operations, matrix operations, C language}
+\keywords{quantum computing, high-level synthesis, MLIR, vector operations, matrix operations, C language}
 
 \maketitle
 
