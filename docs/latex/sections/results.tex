@@ -7,7 +7,7 @@
 \subsection{Experimental Setup}
 \label{sec:setup}
 
-We evaluate the extended QuantumC compiler using the following configuration. The C source programs are parsed using Clang to produce JSON abstract syntax trees. The MLIR generation and dialect definitions rely on xDSL~\cite{xdsl}, a Python-native compiler toolkit that supports progressive lowering. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit}. All experiments were executed on a MacBook Pro equipped with an Apple M3 Pro chip (11 cores) and 18\,GB of RAM, running macOS with Python 3.12.
+We evaluate the extended QuantumC compiler using the following configuration. The C source programs are parsed using Clang~\cite{clang} to produce JSON abstract syntax trees. The MLIR generation and dialect definitions rely on xDSL~\cite{xdsl}, a Python-native compiler toolkit that supports progressive lowering. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit}. All experiments were executed on a MacBook Pro equipped with an Apple M3 Pro chip (11 cores) and 18\,GB of RAM, running macOS with Python 3.12.
 
 The benchmark suite consists of five representative programs that exercise the extended compilation capabilities: two vector addition programs with different sizes ($N=2$ and $N=4$), a dot product computation, a $2 \times 2$ matrix multiplication, and a hybrid program combining scalar arithmetic with vector operations. All benchmarks use 4-bit integer representation, except for matrix multiplication which requires 8 bits to accommodate the range of computed values.
 
