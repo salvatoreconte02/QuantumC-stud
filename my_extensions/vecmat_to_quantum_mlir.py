@@ -1,16 +1,16 @@
-# my_extensions/qar_to_quantum_mlir.py
+# my_extensions/vecmat_to_quantum_mlir.py
 
 """
-Lowering da QAR (QarModule) al quantum MLIR di QuantumC.
+Lowering diretto da VecMatModule al quantum MLIR di QuantumC.
 
 In questa versione:
 - inizializza vettori e matrici con valori REALI se disponibili in:
-    qar_module.const_arrays  +  qar_module.const_shapes
+    vecmat_module.const_arrays  +  vecmat_module.const_shapes
 - supporta anche inizializzazione "fallback" a 0 se non ci sono costanti
 - implementa lowering di:
-    * QarMapAdd  (vec add)
-    * QarDot     (vec dot)
-    * QarMatMul  (matmul)
+    * VecAddOp  (vec add)
+    * VecDotOp  (vec dot)
+    * MatMulOp  (matmul)
 
 AGGIUNTA STRUTTURALE:
 - costruisce una mappa semantica result_map che collega:
@@ -29,11 +29,11 @@ from xdsl.dialects.builtin import ModuleOp, i32
 from xdsl.dialects.func import FuncOp
 from xdsl.ir import Block, Region, SSAValue
 
-from my_extensions.qar_ir import (
-    QarModule,
-    QarMapAdd,
-    QarDot,
-    QarMatMul,
+from my_extensions.vecmat_ir import (
+    VecMatModule,
+    VecAddOp,
+    VecDotOp,
+    MatMulOp,
 )
 
 from step4_mlir_to_quantum_mlir.quantum_dialect import (
@@ -44,11 +44,11 @@ from step4_mlir_to_quantum_mlir.quantum_dialect import (
 
 
 # ---------------------------------------------------------------------------
-# Analisi del QarModule: raccolta info su vettori, matrici e scalari
+# Analisi del VecMatModule: raccolta info su vettori, matrici e scalari
 # ---------------------------------------------------------------------------
 
 def _collect_symbols(
-    qar_module: QarModule,
+    vecmat_module: VecMatModule,
 ) -> tuple[dict[str, tuple[tuple[int, ...], int]], set[str]]:
     """
     Raccoglie:
@@ -82,20 +82,20 @@ def _collect_symbols(
         if _numel(shape) > _numel(old_shape):
             tensor_info[name] = (shape, elem_bits)
 
-    for fn in qar_module.functions:
+    for fn in vecmat_module.functions:
         for op in fn.ops:
-            if isinstance(op, QarMapAdd):
+            if isinstance(op, VecAddOp):
                 shp = (op.length,)
                 for name in (op.dest, op.lhs, op.rhs):
                     _update(name, shp, op.elem_bits)
 
-            elif isinstance(op, QarDot):
+            elif isinstance(op, VecDotOp):
                 scalar_names.add(op.dest)
                 shp = (op.length,)
                 for name in (op.lhs, op.rhs):
                     _update(name, shp, op.elem_bits)
 
-            elif isinstance(op, QarMatMul):
+            elif isinstance(op, MatMulOp):
                 _update(op.lhs, (op.m, op.k), op.elem_bits)
                 _update(op.rhs, (op.k, op.n), op.elem_bits)
                 _update(op.dest, (op.m, op.n), op.elem_bits)
@@ -104,22 +104,22 @@ def _collect_symbols(
 
 
 # ---------------------------------------------------------------------------
-# Entry point: QarModule -> ModuleOp (quantum dialect)
+# Entry point: VecMatModule -> ModuleOp (quantum dialect)
 # ---------------------------------------------------------------------------
 
-def from_qar_to_quantum_mlir(qar_module: QarModule, num_bits: int = 16) -> ModuleOp:
+def from_vecmat_to_quantum_mlir(vecmat_module: VecMatModule, num_bits: int = 16) -> ModuleOp:
     """
-    QarModule -> ModuleOp (quantum dialect)
+    VecMatModule -> ModuleOp (quantum dialect)
 
-    Inizializza registri anche quando non ci sono macro-op QAR:
+    Inizializza registri anche quando non ci sono macro-op:
     usa const_shapes/const_arrays per costruire tensor_info.
 
     NOTA: viene aggiunto module.result_map come side-table del compilatore.
     """
-    tensor_info, scalar_names = _collect_symbols(qar_module)
+    tensor_info, scalar_names = _collect_symbols(vecmat_module)
 
-    const_arrays = getattr(qar_module, "const_arrays", {}) or {}
-    const_shapes = getattr(qar_module, "const_shapes", {}) or {}
+    const_arrays = getattr(vecmat_module, "const_arrays", {}) or {}
+    const_shapes = getattr(vecmat_module, "const_shapes", {}) or {}
 
     for name in set(const_arrays.keys()) | set(const_shapes.keys()):
         if name in tensor_info:
@@ -153,10 +153,10 @@ def from_qar_to_quantum_mlir(qar_module: QarModule, num_bits: int = 16) -> Modul
         scalar_names,
         tensor_env,
         scalar_env,
-        qar_module,
+        vecmat_module,
     )
 
-    _emit_qar_ops(entry_block, qar_module, tensor_env, scalar_env, module.result_map)
+    _emit_vecmat_ops(entry_block, vecmat_module, tensor_env, scalar_env, module.result_map)
 
     return module
 
@@ -171,10 +171,10 @@ def _emit_tensor_and_scalar_inits(
     scalar_names: set[str],
     tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
-    qar_module: QarModule,
+    vecmat_module: VecMatModule,
 ):
-    const_arrays = getattr(qar_module, "const_arrays", {}) or {}
-    const_shapes = getattr(qar_module, "const_shapes", {}) or {}
+    const_arrays = getattr(vecmat_module, "const_arrays", {}) or {}
+    const_shapes = getattr(vecmat_module, "const_shapes", {}) or {}
 
     def _numel(shape: tuple[int, ...]) -> int:
         t = 1
@@ -209,23 +209,23 @@ def _emit_tensor_and_scalar_inits(
 
 
 # ---------------------------------------------------------------------------
-# Lowering delle op QAR in operazioni quantum.*
+# Lowering delle op VecMat in operazioni quantum.*
 # ---------------------------------------------------------------------------
 
-def _emit_qar_ops(
+def _emit_vecmat_ops(
     block: Block,
-    qar_module: QarModule,
+    vecmat_module: VecMatModule,
     tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
     result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
-    for fn in qar_module.functions:
+    for fn in vecmat_module.functions:
         for op in fn.ops:
-            if isinstance(op, QarMapAdd):
+            if isinstance(op, VecAddOp):
                 _lower_vec_add(block, op, tensor_env, result_map)
-            elif isinstance(op, QarDot):
+            elif isinstance(op, VecDotOp):
                 _lower_vec_dot(block, op, tensor_env, scalar_env, result_map)
-            elif isinstance(op, QarMatMul):
+            elif isinstance(op, MatMulOp):
                 _lower_matmul(block, op, tensor_env, result_map)
             else:
                 pass
@@ -233,7 +233,7 @@ def _emit_qar_ops(
 
 def _lower_vec_add(
     block: Block,
-    op: QarMapAdd,
+    op: VecAddOp,
     tensor_env: dict[str, list[SSAValue]],
     result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
@@ -252,7 +252,7 @@ def _lower_vec_add(
 
 def _lower_vec_dot(
     block: Block,
-    op: QarDot,
+    op: VecDotOp,
     tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
     result_map: Dict[Tuple[Any, ...], SSAValue],
@@ -275,7 +275,7 @@ def _lower_vec_dot(
 
 def _lower_matmul(
     block: Block,
-    op: QarMatMul,
+    op: MatMulOp,
     tensor_env: dict[str, list[SSAValue]],
     result_map: Dict[Tuple[Any, ...], SSAValue],
 ):

@@ -47,8 +47,7 @@ from my_extensions.vecmat_lowering import (
     _match_matmul_for,
     _match_matmul_for_direct,
 )
-from my_extensions.vecmat_to_qar import from_vecmat_to_qar
-from my_extensions.qar_to_quantum_mlir import from_qar_to_quantum_mlir
+from my_extensions.vecmat_to_quantum_mlir import from_vecmat_to_quantum_mlir
 
 JSON_DIR = "json_out"
 MLIR_DIR = "mlir_out"
@@ -648,18 +647,14 @@ def compile_c_file(
 
     if enable_vecmat_path:
         if has_vecmat_ops:
-            print(">>> Rilevate macro-op vettoriali/matriciali: VecMat → QAR → quantum.")
+            print(">>> Rilevate macro-op vettoriali/matriciali: VecMat → quantum.")
         else:
-            print(">>> Nessuna macro-op, ma presenti inizializzazioni costanti: VecMat → QAR → quantum (solo init).")
+            print(">>> Nessuna macro-op, ma presenti inizializzazioni costanti: VecMat → quantum (solo init).")
 
-        qar_module = from_vecmat_to_qar(vecmat_module)
-        print("=== QarModule (dialetto QAR) ===")
-        pprint(qar_module)
+        print("VecMat const_arrays:", getattr(vecmat_module, "const_arrays", None))
+        print("VecMat const_shapes:", getattr(vecmat_module, "const_shapes", None))
 
-        print("QAR const_arrays:", getattr(qar_module, "const_arrays", None))
-        print("QAR const_shapes:", getattr(qar_module, "const_shapes", None))
-
-        vec_quantum_module = from_qar_to_quantum_mlir(qar_module, num_bits=num_bits)
+        vec_quantum_module = from_vecmat_to_quantum_mlir(vecmat_module, num_bits=num_bits)
         vec_quantum_path = os.path.join(QMLIR_DIR, f"{base}_quantum_vec.mlir")
         save_module(vec_quantum_module, vec_quantum_path)
 

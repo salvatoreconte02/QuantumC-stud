@@ -11,8 +11,7 @@ sys.path.insert(0, '.')
 from step2_ast_to_dataclasses.c_ast import parse_ast
 from step5_quantum_mlir_to_qasm.qasm_generator import generate_circuit
 from my_extensions.vecmat_lowering import from_c_ast_to_vecmat
-from my_extensions.vecmat_to_qar import from_vecmat_to_qar
-from my_extensions.qar_to_quantum_mlir import from_qar_to_quantum_mlir
+from my_extensions.vecmat_to_quantum_mlir import from_vecmat_to_quantum_mlir
 
 JSON_DIR = "json_out"
 
@@ -34,8 +33,7 @@ def generate_figure(c_file, num_bits, output_path):
 
     tu = parse_ast(ast_json)
     vecmat_module = from_c_ast_to_vecmat(tu, elem_bits=num_bits)
-    qar_module = from_vecmat_to_qar(vecmat_module)
-    quantum_module = from_qar_to_quantum_mlir(qar_module, num_bits=num_bits)
+    quantum_module = from_vecmat_to_quantum_mlir(vecmat_module, num_bits=num_bits)
 
     # Genera circuito
     circuit = generate_circuit(quantum_module, num_bits=num_bits, verbose=False, arithmetic_mode="qft")
