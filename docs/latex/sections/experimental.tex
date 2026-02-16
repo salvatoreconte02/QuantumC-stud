@@ -4,49 +4,21 @@
 \section{Extended Compilation Pipeline}
 \label{sec:pipeline}
 
+We extend the QuantumC pipeline with a dedicated path for vector and matrix operations, preserving compatibility with existing scalar compilation. Figure~\ref{fig:pipeline} illustrates the extended architecture. The following subsections detail the pipeline structure, intermediate representations, the pattern recognition and lowering process, and support for hybrid programs.
+
 % Figura pipeline
 \input{figures/pipeline}
 
+\subsection{Compilation Pipeline}
+\label{sec:compilation-pipeline}
+
 The original QuantumC pipeline processes C programs through five sequential stages, from AST generation to OpenQASM output. Our extension augments this pipeline with a dedicated compilation path for vector and matrix operations, while preserving full compatibility with the existing scalar infrastructure.
 
-Figure~\ref{fig:pipeline} illustrates the extended architecture. The compilation begins with a \emph{pattern recognition} phase that analyzes the C abstract syntax tree to identify vector and matrix computation patterns. When such patterns are detected, they are extracted from the AST and processed through a dedicated \emph{vector/matrix path}, while the remaining scalar code follows the standard QuantumC pipeline.
+The compilation begins with a \emph{pattern recognition} phase that analyzes the C abstract syntax tree to identify vector and matrix computation patterns. When such patterns are detected, they are extracted from the AST and processed through a dedicated \emph{vector/matrix path}, while the remaining scalar code follows the standard QuantumC pipeline.
 
 In the vector/matrix path, recognized patterns are first represented in a high-level \emph{VecMat IR} that captures the semantic meaning of the computation. This representation is then lowered to a \emph{Quantum Arithmetic Representation (QAR)}, which expresses operations in terms of quantum arithmetic primitives. Finally, the QAR is translated into quantum operations compatible with the existing QuantumC quantum dialect.
 
 The two paths converge in a \emph{merge phase} that combines their quantum representations into a unified module. A \emph{result map} tracks the correspondence between high-level array elements and their quantum register assignments, ensuring that return statements and data dependencies are correctly resolved across the two paths.
-
-This design enables \emph{hybrid compilation}: programs containing both scalar arithmetic and vector/matrix operations are compiled correctly, with each component processed through the most appropriate path.
-
-\subsection{Pattern Recognition}
-\label{sec:pattern-recognition}
-
-The pattern recognition phase identifies common vector and matrix computations by analyzing the structure of loop constructs in the C abstract syntax tree. Rather than relying on explicit annotations or library calls, our approach recognizes computation patterns based on their syntactic structure, enabling the compiler to capture high-level semantics that would otherwise be lost through naive loop unrolling.
-
-The recognition algorithm traverses the AST and examines each \texttt{for} loop, checking whether its structure matches one of the supported patterns. For a loop to be recognized, it must satisfy several conditions: (1)~the loop header must follow a canonical form with initialization to zero, a comparison against a constant bound, and unit increment; (2)~the loop body must contain array accesses indexed by the loop variable; and (3)~the computation must match the expected arithmetic structure.
-
-Table~\ref{tab:patterns} summarizes the three supported patterns. \emph{Vector addition} is recognized as a single loop where each iteration computes \texttt{c[i] = a[i] + b[i]}. \emph{Dot product} is identified by a single loop with scalar accumulation of the form \texttt{s = s + a[i] * b[i]}. \emph{Matrix multiplication} requires a triple nested loop structure with indices \texttt{i}, \texttt{j}, \texttt{k}, where the innermost computation accumulates products of the form \texttt{A[i][k] * B[k][j]} into the result matrix \texttt{C[i][j]}.
-When a pattern is successfully matched, the corresponding loop is removed from the AST that will be processed by the scalar path, and a high-level operation is created in the VecMat IR. Loops that do not match any pattern remain in the AST and are processed through the standard QuantumC pipeline with static unrolling.
-
-\begin{table}[!htb]
-  \caption{Supported Vector and Matrix Patterns}
-  \label{tab:patterns}
-  \centering
-  \small
-  \setlength{\tabcolsep}{6pt} % opzionale: riduce/controlla spaziatura orizzontale
-  \begin{tabularx}{\linewidth}{l>{\ttfamily\raggedright\arraybackslash}X l}
-    \toprule
-    Pattern & C Code Structure & Loop Nesting \\
-    \midrule
-    Vector addition & c[i] = a[i] + b[i] & Single loop \\
-    Dot product & s = s + a[i] * b[i] & Single loop \\
-    Matrix multiplication & C[i][j] += A[i][k] * B[k][j] & Triple nested \\
-    \bottomrule
-  \end{tabularx}
-\end{table}
-
-
-
-
 
 \subsection{Intermediate Representations}
 \label{sec:intermediate-repr}
@@ -69,32 +41,143 @@ The QAR serves as a bridge between the high-level VecMat operations and the low-
 
 The key role of QAR is to provide a uniform interface for the subsequent quantum code generation phase, regardless of whether operations originated from vector or matrix patterns. The constant table is propagated from VecMat IR to QAR, ensuring that initialization values are available during quantum register allocation.
 
-\noindent\textbf{Example: From C to Quantum Operations.}
-Figure~\ref{fig:lowering-example} illustrates the lowering process for a vector addition. The C source contains a loop that computes \texttt{c[i] = a[i] + b[i]}. The pattern recognition phase identifies this structure and produces a single \texttt{VecAdd} operation in the VecMat IR, which captures the computation without the loop structure. This operation is then lowered to a \texttt{QarMapAdd} in the QAR, preserving the same semantic information.
+\begin{figure}[htb]
+% Row 1: VecAdd and VecDot
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=mlirstyle]
+VecAdd {
+  dest: "c"
+  lhs: "a", rhs: "b"
+  length: 4, elem_bits: 16
+}
+\end{lstlisting}
+\centering\small (a) VecAdd
+\end{minipage}
+\hfill
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=mlirstyle]
+VecDot {
+  dest: "s"
+  lhs: "a", rhs: "b"
+  length: 4, elem_bits: 16
+}
+\end{lstlisting}
+\centering\small (b) VecDot
+\end{minipage}
 
-Finally, the QAR operation is translated into quantum operations. For a vector of length $N$, the lowering produces $N$ independent \texttt{quantum.addi} operations, one for each element. Each array element is mapped to a separate quantum register, initialized with the corresponding constant value when available. The \emph{result map} records the correspondence between array indices (e.g., \texttt{c[0]}, \texttt{c[1]}) and their final quantum register assignments, enabling correct handling of return statements that reference array elements.
+\vspace{0.5em}
 
-% Figura lowering example - definita in figures/lowering-example.tex
-\input{figures/lowering-example}
+% Row 2: MatMul (wider)
+\begin{minipage}{\columnwidth}
+\begin{lstlisting}[style=mlirstyle]
+MatMul {
+  dest: "C", lhs: "A", rhs: "B"
+  m: 2, n: 2, k: 2, elem_bits: 16
+}
+\end{lstlisting}
+\centering\small (c) MatMul
+\end{minipage}
+\caption{VecMat IR operations: vector addition, dot product, and matrix multiplication.}
+\label{fig:ir-examples}
+\end{figure}
 
-\subsection{Lowering to Quantum Operations}
-\label{sec:lowering}
+\subsection{Pattern Recognition and Lowering}
+\label{sec:pattern-lowering}
 
+The pattern recognition phase identifies common vector and matrix computations by analyzing the structure of loop constructs in the C abstract syntax tree. Rather than relying on explicit annotations or library calls, our approach recognizes computation patterns based on their syntactic structure, enabling the compiler to capture high-level semantics that would otherwise be lost through naive loop unrolling.
+
+The recognition algorithm traverses the AST and examines each \texttt{for} loop, checking whether its structure matches one of the supported patterns. For a loop to be recognized, it must satisfy several conditions: (1)~the loop header must follow a canonical form with initialization to zero, a comparison against a constant bound, and unit increment; (2)~the loop body must contain array accesses indexed by the loop variable; and (3)~the computation must match the expected arithmetic structure.
+
+Table~\ref{tab:patterns} summarizes the three supported patterns. \emph{Vector addition} is recognized as a single loop where each iteration computes \texttt{c[i] = a[i] + b[i]}. \emph{Dot product} is identified by a single loop with scalar accumulation of the form \texttt{s = s + a[i] * b[i]}. \emph{Matrix multiplication} requires a triple nested loop structure with indices \texttt{i}, \texttt{j}, \texttt{k}, where the innermost computation accumulates products of the form \texttt{A[i][k] * B[k][j]} into the result matrix \texttt{C[i][j]}.
+
+When a pattern is successfully matched, the corresponding loop is removed from the AST that will be processed by the scalar path, and a high-level operation is created in the VecMat IR. Loops that do not match any pattern remain in the AST and are processed through the standard QuantumC pipeline with static unrolling.
+
+\begin{table}[!htb]
+  \caption{Supported Vector and Matrix Patterns}
+  \label{tab:patterns}
+  \centering
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabularx}{\linewidth}{l>{\ttfamily\raggedright\arraybackslash}X l}
+    \toprule
+    Pattern & C Code Structure & Loop Nesting \\
+    \midrule
+    Vector addition & c[i] = a[i] + b[i] & Single loop \\
+    Dot product & s = s + a[i] * b[i] & Single loop \\
+    Matrix multiplication & C[i][j] += A[i][k] * B[k][j] & Triple nested \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\noindent\textbf{Lowering to Quantum Operations.}
 The final stage of the vector/matrix path translates QAR operations into quantum operations compatible with the QuantumC quantum dialect. This lowering phase performs two key tasks: allocating and initializing quantum registers for array elements, and generating the arithmetic operations that implement the computation.
 
-\textbf{Register Allocation and Initialization.} Each array element is mapped to a dedicated quantum register. For a vector of length $N$, the lowering allocates $N$ registers; for an $M \times N$ matrix, it allocates $M \times N$ registers in row-major order. When compile-time initialization values are available from the constant table, registers are initialized to the corresponding values using \texttt{quantum.init} operations. Otherwise, registers are initialized to zero.
+Each array element is mapped to a dedicated quantum register. For a vector of length $N$, the lowering allocates $N$ registers; for an $M \times N$ matrix, it allocates $M \times N$ registers in row-major order. When compile-time initialization values are available from the constant table, registers are initialized to the corresponding values using \texttt{quantum.init} operations.
 
-\textbf{Arithmetic Lowering.} The three QAR operations are lowered as follows:
-
+The three QAR operations are lowered as follows:
 \begin{itemize}
-    \item \textbf{QarMapAdd} (vector addition): For a vector of length $N$, the lowering generates $N$ independent \texttt{quantum.addi} operations. Each operation adds the corresponding elements from the two input vectors and stores the result in the output register. These operations are independent and could potentially be executed in parallel on quantum hardware.
-
-    \item \textbf{QarDot} (dot product): The lowering generates a sequence of multiply-accumulate operations. For each index $i$ from $0$ to $N-1$, a \texttt{quantum.muli} computes the product $a[i] \cdot b[i]$, followed by a \texttt{quantum.addi} that accumulates the result into a scalar register. The final value of the accumulator represents the dot product.
-
-    \item \textbf{QarMatMul} (matrix multiplication): For each element $C[i][j]$ of the result matrix, the lowering generates $K$ multiply-accumulate operations corresponding to the inner product $\sum_{k=0}^{K-1} A[i][k] \cdot B[k][j]$. This results in $M \times N \times K$ multiplications and the same number of additions.
+    \item \textbf{QarMapAdd}: For a vector of length $N$, generates $N$ independent \texttt{quantum.addi} operations, each adding corresponding elements from the input vectors.
+    \item \textbf{QarDot}: Generates a sequence of multiply-accumulate operations. For each index $i$, a \texttt{quantum.muli} computes $a[i] \cdot b[i]$, followed by \texttt{quantum.addi} to accumulate the result.
+    \item \textbf{QarMatMul}: For each element $C[i][j]$, generates $K$ multiply-accumulate operations for the inner product $\sum_{k=0}^{K-1} A[i][k] \cdot B[k][j]$.
 \end{itemize}
 
-\textbf{Result Mapping.} During lowering, a \emph{result map} is constructed that associates each array element with its final quantum register (SSA value). For vectors, the map uses keys of the form $(name, i)$; for matrices, $(name, i, j)$; and for scalars, $(name)$. This mapping is essential for the subsequent merge phase, which must connect the correct quantum register to return statements that reference array elements.
+During lowering, a \emph{result map} is constructed that associates each array element with its final quantum register. This mapping is essential for the merge phase, which must connect the correct quantum register to return statements that reference array elements.
+
+\noindent\textbf{Example.}
+Figure~\ref{fig:lowering-example} illustrates the complete lowering process for a vector addition, from C source through intermediate representations to quantum operations.
+
+\begin{figure}[htb]
+% Row 1: C source and VecMat IR
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=cstyle, frame=single]
+int a[2] = {1, 2};
+int b[2] = {3, 4};
+int c[2];
+for (int i = 0; i < 2; i++)
+    c[i] = a[i] + b[i];
+\end{lstlisting}
+\centering\small (a) C source
+\end{minipage}
+\hfill
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=mlirstyle, frame=single]
+VecAdd {
+  dest: "c"
+  lhs: "a", rhs: "b"
+  length: 2, elem_bits: 16
+}
+\end{lstlisting}
+\centering\small (b) VecMat IR
+\end{minipage}
+
+\vspace{0.5em}
+
+% Row 2: QAR and Quantum Ops
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=mlirstyle, frame=single]
+QarMapAdd {
+  dest: "c"
+  lhs: "a", rhs: "b"
+  length: 2, elem_bits: 16
+}
+\end{lstlisting}
+\centering\small (c) QAR
+\end{minipage}
+\hfill
+\begin{minipage}{0.48\columnwidth}
+\begin{lstlisting}[style=mlirstyle, frame=single]
+%q_a   = quantum.init 1 : i32
+%q_a_1 = quantum.init 2 : i32
+%q_b   = quantum.init 3 : i32
+%q_b_1 = quantum.init 4 : i32
+%0 = quantum.addi %q_a, %q_b : i32
+%1 = quantum.addi %q_a_1, %q_b_1 : i32
+\end{lstlisting}
+\centering\small (d) Quantum Ops
+\end{minipage}
+\caption{Vector addition lowering: from C source through intermediate representations to quantum operations.}
+\label{fig:lowering-example}
+\end{figure}
 
 \subsection{Hybrid Compilation}
 \label{sec:hybrid}
@@ -111,6 +194,4 @@ During insertion, SSA values must be remapped: when an operation is cloned from 
 
 \textbf{Return Value Resolution.} A key challenge arises when the original C program returns an array element, such as \texttt{return c[2]} for a vector or \texttt{return C[1][0]} for a matrix. Since the loop that computes these values is processed by the vector/matrix path, the scalar path has no knowledge of the array and generates a placeholder return value (typically initialized to zero).
 
-To resolve this, the compiler extracts \emph{return hints} from the original C AST before compilation. A return hint records which array element the function intends to return---for example, ``return element 2 of vector c'' or ``return element (1,0) of matrix C''. During the merge phase, if the scalar path's return value is detected as a placeholder, the compiler uses the return hint to look up the corresponding quantum register in the \emph{result map}. The placeholder is then replaced with the actual quantum register holding the computed result.
-
-For example, if the C source contains \texttt{return c[2]} and the result map contains the entry $(\texttt{"c"}, 2) \rightarrow \texttt{\%c2\_final}$, the merge phase replaces the placeholder return with \texttt{return \%c2\_final}, ensuring that the quantum circuit produces the correct output.
+To resolve this, the compiler extracts \emph{return hints} from the original C AST before compilation. A return hint records which array element the function intends to return. During the merge phase, if the scalar path's return value is detected as a placeholder, the compiler uses the return hint to look up the corresponding quantum register in the \emph{result map}. The placeholder is then replaced with the actual quantum register holding the computed result.

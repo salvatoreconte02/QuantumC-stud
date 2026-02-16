@@ -31,13 +31,21 @@
 %% Configurazione listings per codice C
 \lstdefinestyle{cstyle}{
     language=C,
-    basicstyle=\ttfamily\small,
+    basicstyle=\ttfamily\footnotesize,
     keywordstyle=\color{blue},
     commentstyle=\color{gray},
-    numbers=left,
-    numberstyle=\tiny,
-    frame=single,
-    breaklines=true
+    frame=none,
+    breaklines=true,
+    numbers=none
+}
+
+%% Configurazione listings per MLIR/IR
+\lstdefinestyle{mlirstyle}{
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    frame=none,
+    breaklines=true,
+    numbers=none
 }
 
 %%
