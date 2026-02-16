@@ -338,11 +338,12 @@ from qiskit.qasm2 import dumps
 
 
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:
-    """Export the circuit to QASM with Clifford+T-only basis."""
+    """Export the circuit to QASM with uniform gate set for fair comparison."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    clifford_t_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
-    transpiled = transpile(circuit, basis_gates=clifford_t_basis, optimization_level=3)
+    # Gate set uniforme: decompone tutti i gate a 2-qubit in CX
+    uniform_basis = ["cx", "rz", "sx", "x", "measure"]
+    transpiled = transpile(circuit, basis_gates=uniform_basis, optimization_level=3)
 
     with open(path, "w") as f:
         f.write(dumps(transpiled))

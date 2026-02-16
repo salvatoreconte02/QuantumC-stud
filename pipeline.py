@@ -684,15 +684,16 @@ def compile_c_file(
         m_raw = _compute_metrics_and_score(circuit)
         m_raw = CircuitMetrics(mode=mode, **{k: getattr(m_raw, k) for k in m_raw.__dataclass_fields__ if k != "mode"})
 
-        # Transpile verso un basis NISQ-oriented (include rotazioni native).
-        # NOTA: questo NON è un vero basis Clifford+T (che sarebbe solo h,s,t,cx,x).
-        # Il basis include rz, p, cp, crz che sono rotazioni continue supportate
-        # nativamente da hardware NISQ (superconducting, trapped ions, etc.).
+        # Transpile verso un gate set UNIFORME per confronto equo tra backend.
+        # Usiamo {cx, rz, sx, x} che è un basis universale standard:
+        # - cx: unico gate a 2 qubit (permette confronto diretto)
+        # - rz, sx, x: gate single-qubit sufficienti per universalità
+        # Questo decompone sia i 'cp' del QFT che i 'ccx' del ripple-carry.
         circuit_nisq = None
         try:
             from qiskit import transpile as _transpile
-            nisq_basis = ["h", "t", "tdg", "s", "sdg", "cx", "x", "measure", "rz", "p", "cp", "crz"]
-            circuit_nisq = _transpile(circuit, basis_gates=nisq_basis, optimization_level=1)
+            uniform_basis = ["cx", "rz", "sx", "x", "measure"]
+            circuit_nisq = _transpile(circuit, basis_gates=uniform_basis, optimization_level=1)
 
             m_nisq = _compute_metrics_and_score(circuit_nisq)
             m_nisq = CircuitMetrics(mode=mode, **{k: getattr(m_nisq, k) for k in m_nisq.__dataclass_fields__ if k != "mode"})

@@ -6,7 +6,6 @@
 
 \subsection{Experimental Setup}
 \label{sec:setup}
-
 We evaluate the extended QuantumC compiler using the following configuration. The C source programs are parsed using Clang~\cite{clang} to produce JSON abstract syntax trees. The MLIR generation and dialect definitions rely on xDSL~\cite{xdsl}, a Python-native compiler toolkit that supports progressive lowering. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit}. All experiments were executed on a MacBook Pro equipped with an Apple M3 Pro chip (11 cores) and 18\,GB of RAM, running macOS with Python 3.12.
 
 The benchmark suite consists of five representative programs that exercise the extended compilation capabilities: two vector addition programs with different sizes ($N=2$ and $N=4$), a dot product computation, a $2 \times 2$ matrix multiplication, and a hybrid program combining scalar arithmetic with vector operations. All benchmarks use 4-bit integer representation, except for matrix multiplication which requires 8 bits to accommodate the range of computed values.
@@ -14,30 +13,33 @@ The benchmark suite consists of five representative programs that exercise the e
 \subsection{Compilation Results}
 \label{sec:compilation-results}
 
-Table~\ref{tab:compilation} presents the compilation results for the vector and matrix benchmarks using the QFT-based arithmetic backend. All programs were successfully compiled, demonstrating that the pattern recognition and lowering phases correctly handle the three supported patterns: vector addition, dot product, and matrix multiplication.
+Table~\ref{tab:results} presents the compilation results for all benchmarks, comparing both arithmetic backends. All circuits are transpiled to a uniform gate set (CX + single-qubit rotations) to ensure fair comparison. All programs were successfully compiled, demonstrating that the pattern recognition and lowering phases correctly handle the three supported patterns: vector addition, dot product, and matrix multiplication.
 
-\begin{table}[h]
+\begin{table*}[t]
   \centering
-  \caption{Compilation Results for Vector/Matrix Benchmarks (QFT Backend)}
-  \label{tab:compilation}
-  \begin{tabular}{llccrrr}
+  \caption{Circuit metrics for vector/matrix benchmarks (uniform gate set)}
+  \label{tab:results}
+  \small
+  \begin{tabular}{lcc|rrrr|rrrr}
     \toprule
-    Benchmark & Pattern & $N$ & Bits & Qubits & Depth & Gates \\
+    & & & \multicolumn{4}{c|}{QFT} & \multicolumn{4}{c}{Ripple-Carry} \\
+    \cmidrule(lr){4-7} \cmidrule(lr){8-11}
+    Benchmark & $N$ & Bits & Qubits & Depth & Gates & CX & Qubits & Depth & Gates & CX \\
     \midrule
-    vec\_add   & VecAdd  & 2     & 4 & 36  & 23    & 89 \\
-    vec\_add   & VecAdd  & 4     & 4 & 68  & 23    & 174 \\
-    vec\_dot   & VecDot  & 2     & 4 & 40  & 526   & 1409 \\
-    matmul     & MatMul  & 2$\times$2 & 8 & 232 & 8458  & 42709 \\
-    hybrid     & VecAdd  & 2     & 4 & 44  & 23    & 134 \\
+    vec\_add  & 2 & 4 & 36 & 84 & 357 & 128 & 38 & 92 & 261 & 108 \\
+    vec\_add  & 4 & 4 & 68 & 84 & 710 & 256 & 72 & 92 & 518 & 216 \\
+    vec\_dot  & 2 & 4 & 40 & 650 & 1797 & 864 & 42 & 726 & 1713 & 844 \\
+    matmul    & 2 & 8 & 232 & 7119 & 39061 & 22656 & 240 & 7315 & 36149 & 21584 \\
+    hybrid    & 2 & 4 & 44 & 84 & 536 & 192 & 47 & 92 & 392 & 162 \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
-\textbf{Benefits of pattern-based recognition.} The comparison between vector addition at $N=2$ and $N=4$ highlights a key advantage of our pattern-based approach. While qubit count and gate count scale linearly with vector size (doubling from 36 to 68 qubits and from 89 to 174 gates), the circuit depth remains constant at 23. This is possible because our compiler recognizes vector addition as a single high-level operation, rather than treating it as a sequence of independent scalar additions.
+\textbf{Benefits of pattern-based recognition.} The comparison between vector addition at $N=2$ and $N=4$ highlights a key advantage of our pattern-based approach. While qubit count and gate count scale linearly with vector size (doubling from 36 to 68 qubits and from 357 to 710 gates), the circuit depth remains constant at 84. This is possible because our compiler recognizes vector addition as a single high-level operation, rather than treating it as a sequence of independent scalar additions.
 
 In a vector addition $c[i] = a[i] + b[i]$, each element computation is independent from the others: computing $c[0]$ does not require the result of $c[1]$, and vice versa. By capturing this semantic information at the pattern recognition stage, the compiler can generate $N$ parallel addition circuits that execute simultaneously, keeping the depth equal to that of a single addition. A naive approach based on loop unrolling would instead process each iteration sequentially, resulting in a depth that grows linearly with $N$. The pattern-based approach thus preserves the inherent parallelism of vector operations~\cite{hls-book}, which is essential for generating efficient quantum circuits. Figure~\ref{fig:circuit} shows the quantum circuit generated for the vector addition kernel \texttt{c[i] = a[i] + b[i]}. The compiler allocates separate quantum registers for input vectors (\texttt{a}, \texttt{b}) and output vector (\texttt{c}), preserving reversibility. Each element-wise addition uses the QFT-based arithmetic backend described in Section~\ref{sec:quantum-arithmetic}: the repeated QFT and inverse-QFT blocks visible in the circuit correspond to independent additions performed for each vector element.
 
-\textbf{Cost of multiplication-based operations.} The dot product and matrix multiplication benchmarks show significantly higher circuit depth: 526 for dot product versus 23 for vector addition of the same size. This difference has a simple explanation: these operations require accumulation into a shared result.
+\textbf{Cost of multiplication-based operations.} The dot product and matrix multiplication benchmarks show significantly higher circuit depth: 650 for dot product versus 84 for vector addition of the same size. This difference has a simple explanation: these operations require accumulation into a shared result.
 
 In vector addition, each output element $c[i]$ is computed independently. In contrast, the dot product $s = \sum_{i} a[i] \cdot b[i]$ accumulates all partial products into a single scalar $s$. Each accumulation step must wait for the previous one to complete before updating $s$, creating a sequential chain that cannot be parallelized. Matrix multiplication exhibits the same pattern: each output element $C[i][j]$ requires $K$ sequential multiply-accumulate operations. Additionally, multiplication itself is more expensive than addition in quantum arithmetic, further increasing both depth and gate count.
 
@@ -50,37 +52,17 @@ In vector addition, each output element $c[i]$ is computed independently. In con
 
 \textbf{Hybrid compilation.} The hybrid benchmark validates the merge phase of our extended pipeline. This benchmark contains both scalar arithmetic (compiled through the standard QuantumC path) and a vector addition (compiled through our extended path). The two paths are compiled independently and then merged into a unified quantum circuit.
 
-The resulting circuit (44 qubits, depth 23) is only slightly larger than the pure vector addition (36 qubits), with the additional qubits allocated for scalar variables. The constant depth confirms that the merge phase correctly combines the two paths without introducing unnecessary dependencies. The \emph{result map} plays a crucial role in this process: when the C program returns a vector element such as \texttt{c[2]}, the compiler uses the result map to locate the corresponding quantum register and connect it to the output measurement, ensuring correctness even though scalar and vector computations were handled separately.
+The resulting circuit (44 qubits, depth 84) is only slightly larger than the pure vector addition (36 qubits), with the additional qubits allocated for scalar variables. The constant depth confirms that the merge phase correctly combines the two paths without introducing unnecessary dependencies. The \emph{result map} plays a crucial role in this process: when the C program returns a vector element such as \texttt{c[2]}, the compiler uses the result map to locate the corresponding quantum register and connect it to the output measurement, ensuring correctness even though scalar and vector computations were handled separately.
 
 \subsection{Arithmetic Backend Comparison}
 \label{sec:backend-comparison}
 
-As an analysis enabled by our extension, we compare two arithmetic backends: QFT-based and ripple-carry. Both backends are integrated into our extended pipeline, allowing users to select the most appropriate implementation for their target hardware. Table~\ref{tab:backend} presents the comparison using structural circuit metrics.
+Table~\ref{tab:results} enables direct comparison between the two arithmetic backends. The results reveal that, when using a uniform gate set, the ripple-carry backend produces more compact circuits in terms of total gate count and CX gates, while the QFT backend requires fewer qubits.
 
-\begin{table}[h]
-  \centering
-  \caption{Comparison of QFT and Ripple-Carry Backends}
-  \label{tab:backend}
-  \small
-  \begin{tabular}{lrrrrrrr}
-    \toprule
-    & \multicolumn{3}{c}{QFT Backend} & \multicolumn{4}{c}{Ripple-Carry Backend} \\
-    \cmidrule(lr){2-4} \cmidrule(lr){5-8}
-    Benchmark & Qubits & Depth & CX & Qubits & Depth & CX & T \\
-    \midrule
-    vec\_add  & 36  & 23  & 0   & 38  & 77  & 108 & 84 \\
-    vec\_dot  & 40  & 526 & 512 & 42  & 648 & 620 & 84 \\
-    hybrid    & 44  & 23  & 0   & 47  & 77  & 162 & 126 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+For addition-only workloads (vec\_add and hybrid), ripple-carry circuits use fewer CX gates (108 vs 128 for $N=2$) and fewer total gates (261 vs 357). The QFT backend, however, maintains an advantage in qubit count (36 vs 38) and circuit depth (84 vs 92). This difference arises from the algorithmic structure: QFT-based addition operates in the Fourier basis using controlled phase rotations, which are decomposed into multiple CX gates when transpiled to a uniform gate set. Ripple-carry addition uses explicit carry propagation with Toffoli gates, which decompose more efficiently.
 
-The results reveal distinct characteristics of each backend. In our benchmarks, the QFT-based approach produces circuits with fewer qubits and lower depth. For addition-only workloads (vec\_add and hybrid), QFT circuits use zero CNOT gates, relying instead on Hadamard and controlled phase rotations to perform arithmetic in the Fourier basis. This results in significantly shallower circuits: depth 23 for QFT versus 77 for ripple-carry in both cases.
+For multiplication-based operations (vec\_dot, matmul), the situation is similar. Both backends require high CX counts due to the shift-and-add multiplication algorithm, where each partial product addition must be conditionally executed. The ripple-carry backend maintains its advantage in gate count (1713 vs 1797 for vec\_dot), while QFT retains lower qubit requirements (40 vs 42) and depth (650 vs 726).
 
-The ripple-carry backend, in contrast, implements addition through explicit carry propagation using CNOT and Toffoli gates. The T column reports the combined count of T and T$^\dagger$ gates, which arise from the decomposition of Toffoli gates. This approach requires additional ancilla qubits for carry storage and produces deeper circuits due to the sequential nature of carry propagation.
-
-For multiplication-based operations (vec\_dot), the situation is different. Multiplication is implemented as a sequence of shift-and-add operations, where each addition must be conditionally executed based on the bits of one operand. These conditional additions require CNOT gates in both backends, which explains the high CNOT counts observed (512 for QFT, 620 for ripple-carry). Despite this, the QFT backend maintains an advantage in depth (526 vs 648) and qubit count (40 vs 42). The observed advantages of the QFT-based backend arise from its carry-free arithmetic structure and from the specific workloads and structural metrics considered, rather than representing a universally superior arithmetic strategy.
-
-The choice between backends depends on the characteristics of the target quantum hardware. Architectures supporting high-fidelity rotation gates may favor the QFT approach, while systems with efficient Toffoli implementations or limited rotation precision may benefit from ripple-carry arithmetic, which operates entirely in the computational basis.
+The choice between backends depends on the optimization target and hardware constraints. When minimizing qubit count is critical, QFT-based arithmetic is preferable. When minimizing gate count or CX operations is the priority, ripple-carry provides better results.
 
 
