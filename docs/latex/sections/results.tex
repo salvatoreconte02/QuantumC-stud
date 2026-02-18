@@ -4,6 +4,8 @@
 \section{Results and Discussion}
 \label{sec:results}
 
+This section presents the experimental evaluation of our extended QuantumC compiler. We first describe the experimental setup and benchmark suite, then analyze the compilation results for vector and matrix operations. We compare the two arithmetic backends (QFT-based and ripple-carry) and demonstrate the effectiveness of our compile-time sparsity optimization, which reduces circuit complexity when input matrices contain zero elements.
+
 \subsection{Experimental Setup}
 \label{sec:setup}
 We evaluate the extended QuantumC compiler using the following configuration. The C source programs are parsed using Clang~\cite{clang} to produce JSON abstract syntax trees. The MLIR generation and dialect definitions rely on xDSL~\cite{xdsl}, a Python-native compiler toolkit that supports progressive lowering. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit}. All experiments were executed on a MacBook Pro equipped with an Apple M3 Pro chip (11 cores) and 18\,GB of RAM, running macOS with Python 3.12.
@@ -65,4 +67,16 @@ For multiplication-based operations (vec\_dot, matmul), the situation is similar
 
 The choice between backends depends on the optimization target and hardware constraints. When minimizing qubit count is critical, QFT-based arithmetic is preferable. When minimizing gate count or CX operations is the priority, ripple-carry provides better results.
 
+\subsection{Sparsity Optimization}
+\label{sec:sparsity}
+
+\input{figures/sparsity-graphs}
+
+Many real-world linear algebra workloads involve sparse matrices, where a significant fraction of elements are zero. Our compiler exploits this property through a compile-time sparsity optimization: when lowering matrix multiplication from VecMat IR to quantum operations, the compiler checks the constant array values and skips the generation of multiply-accumulate operations for which either operand is zero. Since $0 \times x = 0$ and $\mathit{acc} + 0 = \mathit{acc}$, these operations have no effect on the result and can be safely eliminated.
+
+Figure~\ref{fig:sparsity} shows the impact of this optimization on $4 \times 4$ matrix multiplication with 8-bit integers. We vary the sparsity level from 0\% (dense matrices) to 75\% (12 out of 16 elements are zero) and measure the resulting circuit metrics for both arithmetic backends.
+
+The results demonstrate substantial reductions across all metrics. At 75\% sparsity, qubit count decreases by 68\% (from 1,408 to 448 for QFT), gate count by 94\% (from 37,686 to 2,366), and circuit depth by 72\% (from 1,973 to 552). The optimization is equally effective for both backends, as it operates at the VecMat IR level before the arithmetic backend is selected.
+
+This optimization is particularly valuable for quantum machine learning applications, where weight matrices are often pruned to reduce computational cost. By performing sparsity analysis at compile time, the optimization incurs no runtime overhead and produces circuits that are proportionally smaller to the actual non-zero computation required.
 

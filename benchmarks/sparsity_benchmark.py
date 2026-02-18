@@ -89,7 +89,7 @@ def compile_and_measure(c_code: str, bits: int, backend: str) -> dict:
         tu = parse_ast(ast_json)
         vecmat_module = from_c_ast_to_vecmat(tu, bits)
         quantum_module = from_vecmat_to_quantum_mlir(vecmat_module, bits)
-        circuit = generate_circuit(quantum_module)
+        circuit = generate_circuit(quantum_module, num_bits=bits, arithmetic_mode=backend)
 
         return {
             'qubits': circuit.num_qubits,
@@ -109,7 +109,8 @@ def run_benchmark():
     BACKENDS = ['qft', 'ripple']
 
     # Sparsity levels: number of zeros per matrix (out of 16 elements)
-    ZERO_COUNTS = [0, 4, 8, 12, 14, 15]
+    # Using 0%, 25%, 50%, 75% for clean trends (extreme values cause anomalies)
+    ZERO_COUNTS = [0, 4, 8, 12]
 
     results = []
 

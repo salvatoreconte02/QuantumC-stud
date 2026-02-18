@@ -1,0 +1,78 @@
+% Sparsity optimization graphs - three side by side
+% Usage: \input{figures/sparsity-graphs}
+
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}
+    \begin{groupplot}[
+      group style={
+        group size=3 by 1,
+        horizontal sep=1.2cm,
+      },
+      width=0.36\textwidth,
+      height=5cm,
+      xlabel={Sparsity (\%)},
+      xmin=0, xmax=80,
+      xtick={0,25,50,75},
+      legend style={
+        at={(0.5,1.02)},
+        anchor=south,
+        legend columns=2,
+        font=\footnotesize,
+      },
+      grid=major,
+      grid style={gray!30},
+      tick label style={font=\footnotesize},
+      label style={font=\small},
+    ]
+
+    % Graph 1: Qubits
+    \nextgroupplot[
+      ylabel={Qubits},
+      ymin=0, ymax=1600,
+      title={\textbf{(a) Qubit Count}},
+      title style={font=\small},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (0, 1408) (25, 960) (50, 624) (75, 448)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (0, 1472) (25, 996) (50, 639) (75, 452)
+    };
+    \legend{QFT, Ripple}
+
+    % Graph 2: Gates
+    \nextgroupplot[
+      ylabel={Gates},
+      ymin=0, ymax=40000,
+      title={\textbf{(b) Gate Count}},
+      title style={font=\small},
+      scaled y ticks=false,
+      yticklabel style={/pgf/number format/fixed, /pgf/number format/1000 sep={\,}},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (0, 37686) (25, 21206) (50, 8848) (75, 2366)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (0, 36534) (25, 20558) (50, 8578) (75, 2294)
+    };
+
+    % Graph 3: Depth
+    \nextgroupplot[
+      ylabel={Depth},
+      ymin=0, ymax=2200,
+      title={\textbf{(c) Circuit Depth}},
+      title style={font=\small},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (0, 1973) (25, 1861) (50, 1366) (75, 552)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (0, 2044) (25, 1896) (50, 1383) (75, 569)
+    };
+
+    \end{groupplot}
+  \end{tikzpicture}
+  \caption{Impact of matrix sparsity on circuit metrics for $4 \times 4$ matrix multiplication (8-bit integers). Sparsity is defined as the fraction of zero elements in the input matrices. All three metrics decrease significantly as sparsity increases: at 75\% sparsity, gate count is reduced by 94\% compared to dense matrices. The optimization is equally effective for both arithmetic backends.}
+  \label{fig:sparsity}
+\end{figure*}
