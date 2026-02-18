@@ -156,7 +156,7 @@ def from_vecmat_to_quantum_mlir(vecmat_module: VecMatModule, num_bits: int = 16)
         vecmat_module,
     )
 
-    _emit_vecmat_ops(entry_block, vecmat_module, tensor_env, scalar_env, module.result_map)
+    _emit_vecmat_ops(entry_block, vecmat_module, tensor_env, scalar_env, module.result_map, const_arrays)
 
     return module
 
@@ -218,15 +218,16 @@ def _emit_vecmat_ops(
     tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
     result_map: Dict[Tuple[Any, ...], SSAValue],
+    const_arrays: dict[str, list[int]],
 ):
     for fn in vecmat_module.functions:
         for op in fn.ops:
             if isinstance(op, VecAddOp):
                 _lower_vec_add(block, op, tensor_env, result_map)
             elif isinstance(op, VecDotOp):
-                _lower_vec_dot(block, op, tensor_env, scalar_env, result_map)
+                _lower_vec_dot(block, op, tensor_env, scalar_env, result_map, const_arrays)
             elif isinstance(op, MatMulOp):
-                _lower_matmul(block, op, tensor_env, result_map)
+                _lower_matmul(block, op, tensor_env, result_map, const_arrays)
             else:
                 pass
 
@@ -256,12 +257,20 @@ def _lower_vec_dot(
     tensor_env: dict[str, list[SSAValue]],
     scalar_env: dict[str, SSAValue],
     result_map: Dict[Tuple[Any, ...], SSAValue],
+    const_arrays: dict[str, list[int]],
 ):
     a_regs = tensor_env[op.lhs]
     b_regs = tensor_env[op.rhs]
     acc = scalar_env[op.dest]
 
     for i in range(op.length):
+        # Sparsity optimization: skip if either operand is zero
+        a_vals = const_arrays.get(op.lhs)
+        b_vals = const_arrays.get(op.rhs)
+        if a_vals is not None and b_vals is not None:
+            if a_vals[i] == 0 or b_vals[i] == 0:
+                continue
+
         mul_op = QMuliOp(a_regs[i], b_regs[i])
         block.add_op(mul_op)
 
@@ -278,6 +287,7 @@ def _lower_matmul(
     op: MatMulOp,
     tensor_env: dict[str, list[SSAValue]],
     result_map: Dict[Tuple[Any, ...], SSAValue],
+    const_arrays: dict[str, list[int]],
 ):
     """
     C = A * B
@@ -300,6 +310,15 @@ def _lower_matmul(
         for j in range(n):
             acc = C[idx(i, j, n)]
             for kk in range(k):
+                # Sparsity optimization: skip if either operand is zero
+                a_vals = const_arrays.get(op.lhs)
+                b_vals = const_arrays.get(op.rhs)
+                if a_vals is not None and b_vals is not None:
+                    a_val = a_vals[idx(i, kk, k)]
+                    b_val = b_vals[idx(kk, j, n)]
+                    if a_val == 0 or b_val == 0:
+                        continue
+
                 a_ik = A[idx(i, kk, k)]
                 b_kj = B[idx(kk, j, n)]
 
