@@ -28,6 +28,7 @@ from step2_ast_to_dataclasses.c_ast import (
     ArrayAccess,
     DeclRef,
     IntegerLiteral,
+    BinaryOperator,
 )
 from step3_dataclasses_to_mlir.mlir_generator import MLIRGenerator
 from step4_mlir_to_quantum_mlir.quantum_mlir_generator import generate_quantum_mlir
@@ -37,7 +38,13 @@ from step5_quantum_mlir_to_qasm.qasm_generator import (
     export_qasm_clifford_t,
 )
 from step5_quantum_mlir_to_qasm.q_arithmetics import simulate
-from step4_mlir_to_quantum_mlir.quantum_dialect import QuantumInitOp
+from step4_mlir_to_quantum_mlir.quantum_dialect import (
+    QuantumInitOp,
+    QAddiOp,
+    QSubiOp,
+    QMuliOp,
+    QDivSOp,
+)
 
 # Estensioni nostre
 from my_extensions.vecmat_lowering import (
@@ -229,6 +236,14 @@ class ReturnHint:
     n: int | None = None
 
 
+@dataclass(frozen=True)
+class HybridReturnHint:
+    """Return che combina scalare + elemento array, es. `return z + C[1][1]`"""
+    opcode: str           # "+", "-", "*", "/"
+    scalar_side: str      # "lhs" o "rhs" (quale lato è lo scalare)
+    array_hint: ReturnHint  # hint per l'elemento array
+
+
 def _unwrap_int(x: object) -> int | None:
     """
     Converte un valore potenzialmente wrappato (es. .data) in int.
@@ -289,14 +304,85 @@ def _get_matmul_n_for_dest(vecmat_module, dest: str, fn_name: str) -> int | None
     return None
 
 
+def _is_array_access(expr) -> bool:
+    """Controlla se l'espressione è un accesso ad array (1D o 2D)."""
+    if not isinstance(expr, ArrayAccess):
+        return False
+    # c[i] - array 1D
+    if isinstance(expr.array, DeclRef) and isinstance(expr.index, IntegerLiteral):
+        return True
+    # C[i][j] - array 2D
+    if (
+        isinstance(expr.array, ArrayAccess)
+        and isinstance(expr.array.array, DeclRef)
+        and isinstance(expr.array.index, IntegerLiteral)
+        and isinstance(expr.index, IntegerLiteral)
+    ):
+        return True
+    return False
+
+
+def _is_scalar_expr(expr) -> bool:
+    """Controlla se l'espressione è scalare (non un accesso ad array)."""
+    # DeclRef semplice (variabile scalare)
+    if isinstance(expr, DeclRef):
+        return True
+    # Letterale intero
+    if isinstance(expr, IntegerLiteral):
+        return True
+    # Operazione binaria su scalari
+    if isinstance(expr, BinaryOperator):
+        return _is_scalar_expr(expr.lhs) and _is_scalar_expr(expr.rhs)
+    return False
+
+
+def _extract_array_hint_from_access(
+    expr: ArrayAccess,
+    vecmat_module,
+    fn_name: str,
+) -> ReturnHint | None:
+    """Estrae un ReturnHint da un ArrayAccess (1D o 2D)."""
+    # c[i] - array 1D
+    if isinstance(expr.array, DeclRef) and isinstance(expr.index, IntegerLiteral):
+        base = _declref_name(expr.array)
+        idx0 = _int_lit_value(expr.index)
+        if base is None or idx0 is None:
+            return None
+        return ReturnHint(kind="vec", name=base, idx=idx0, index=idx0)
+
+    # C[i][j] - array 2D
+    if (
+        isinstance(expr.array, ArrayAccess)
+        and isinstance(expr.array.array, DeclRef)
+        and isinstance(expr.array.index, IntegerLiteral)
+        and isinstance(expr.index, IntegerLiteral)
+    ):
+        base = _declref_name(expr.array.array)
+        row = _int_lit_value(expr.array.index)
+        col = _int_lit_value(expr.index)
+        if base is None or row is None or col is None:
+            return None
+
+        n = _get_matmul_n_for_dest(vecmat_module, base, fn_name)
+        if n is None or n <= 0:
+            return None
+
+        idx = row * n + col
+        return ReturnHint(kind="mat", name=base, idx=idx, row=row, col=col, n=n)
+
+    return None
+
+
 def _extract_return_hint_for_function(
     fn: FunctionDecl,
     vecmat_module,
-) -> ReturnHint | None:
+) -> ReturnHint | HybridReturnHint | None:
     """
     Estrae un hint dal return C:
       - return c[<const>]
       - return C[<const>][<const>]
+      - return <scalar> + c[<const>]   (HybridReturnHint)
+      - return C[<const>][<const>] + <scalar>  (HybridReturnHint)
     """
     if not isinstance(fn.body, CompoundStmt):
         return None
@@ -340,11 +426,28 @@ def _extract_return_hint_for_function(
         idx = row * n + col
         return ReturnHint(kind="mat", name=base, idx=idx, row=row, col=col, n=n)
 
+    # return <scalar> OP <array[...]> oppure <array[...]> OP <scalar>
+    if isinstance(v, BinaryOperator):
+        lhs, rhs = v.lhs, v.rhs
+        opcode = v.opcode
+
+        # Caso: return scalar + C[i][j] (o c[i])
+        if _is_scalar_expr(lhs) and _is_array_access(rhs):
+            array_hint = _extract_array_hint_from_access(rhs, vecmat_module, fn.name)
+            if array_hint is not None:
+                return HybridReturnHint(opcode=opcode, scalar_side="lhs", array_hint=array_hint)
+
+        # Caso: return C[i][j] + scalar (o c[i] + scalar)
+        if _is_array_access(lhs) and _is_scalar_expr(rhs):
+            array_hint = _extract_array_hint_from_access(lhs, vecmat_module, fn.name)
+            if array_hint is not None:
+                return HybridReturnHint(opcode=opcode, scalar_side="rhs", array_hint=array_hint)
+
     return None
 
 
-def _extract_return_hints(tu: TranslationUnit, vecmat_module) -> dict[str, ReturnHint]:
-    hints: dict[str, ReturnHint] = {}
+def _extract_return_hints(tu: TranslationUnit, vecmat_module) -> dict[str, ReturnHint | HybridReturnHint]:
+    hints: dict[str, ReturnHint | HybridReturnHint] = {}
     for decl in tu.decls:
         if not isinstance(decl, FunctionDecl):
             continue
@@ -361,7 +464,7 @@ def _extract_return_hints(tu: TranslationUnit, vecmat_module) -> dict[str, Retur
 def _merge_scalar_and_vec_quantum(
     scalar_quantum_module: ModuleOp,
     vec_quantum_module: ModuleOp,
-    return_hints: dict[str, ReturnHint] | None = None,
+    return_hints: dict[str, ReturnHint | HybridReturnHint] | None = None,
 ) -> ModuleOp:
     """
     Merge + collegamento risultato vettoriale/matriciale al return (solo se il return scalare è placeholder).
@@ -459,11 +562,56 @@ def _merge_scalar_and_vec_quantum(
                 except Exception:
                     is_placeholder_zero = False
 
-            if is_placeholder_zero:
-                chosen: SSAValue | None = None
-                hint = return_hints.get(fname)
+            hint = return_hints.get(fname)
 
-                if hint is not None and vec_result_map is not None:
+            # NUOVO: gestione return ibrido (scalar + array)
+            # es. return z + C[1][1]
+            if isinstance(hint, HybridReturnHint) and not is_placeholder_zero:
+                # Il return scalare ha già il valore di z (scalare)
+                scalar_val = ret_val
+
+                # Trova il valore array dal result_map
+                array_hint = hint.array_hint
+                array_val: SSAValue | None = None
+                if vec_result_map is not None:
+                    try:
+                        if array_hint.kind == "vec" and array_hint.index is not None:
+                            key = (array_hint.name, array_hint.index)
+                            if key in vec_result_map:
+                                array_val = remap(vec_result_map[key])
+                        elif array_hint.kind == "mat" and array_hint.row is not None and array_hint.col is not None:
+                            key = (array_hint.name, array_hint.row, array_hint.col)
+                            if key in vec_result_map:
+                                array_val = remap(vec_result_map[key])
+                    except Exception:
+                        array_val = None
+
+                if array_val is not None:
+                    # Determina ordine operandi
+                    if hint.scalar_side == "lhs":
+                        lhs_val, rhs_val = scalar_val, array_val
+                    else:
+                        lhs_val, rhs_val = array_val, scalar_val
+
+                    # Emetti l'operazione quantum corrispondente
+                    new_op: Operation | None = None
+                    if hint.opcode == "+":
+                        new_op = QAddiOp(lhs_val, rhs_val)
+                    elif hint.opcode == "-":
+                        new_op = QSubiOp(lhs_val, rhs_val)
+                    elif hint.opcode == "*":
+                        new_op = QMuliOp(lhs_val, rhs_val)
+                    elif hint.opcode == "/":
+                        new_op = QDivSOp(lhs_val, rhs_val)
+
+                    if new_op is not None:
+                        insert_before(return_anchor, new_op)
+                        return_anchor.operands = [new_op.results[0]]
+
+            elif is_placeholder_zero:
+                chosen: SSAValue | None = None
+
+                if hint is not None and vec_result_map is not None and isinstance(hint, ReturnHint):
                     try:
                         if hint.kind == "vec" and hint.index is not None:
                             key = (hint.name, hint.index)
@@ -485,7 +633,7 @@ def _merge_scalar_and_vec_quantum(
                         except Exception:
                             pass
 
-                    if hint is not None and sinks:
+                    if hint is not None and isinstance(hint, ReturnHint) and sinks:
                         if 0 <= hint.idx < len(sinks):
                             chosen = sinks[hint.idx]
 

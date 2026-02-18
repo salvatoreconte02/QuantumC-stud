@@ -147,7 +147,7 @@ func @main() -> i32 \{\\
 
 \end{tikzpicture}
 
-\caption{Hybrid compilation: a C program containing both scalar and vector operations is split into two compilation paths. The scalar path follows the standard QuantumC pipeline, while the vector path is processed through the VecMat IR. Both paths are merged into a unified quantum module, with the \emph{result\_map} resolving array element references (e.g., \texttt{c[0]} $\rightarrow$ \texttt{\%c0}).}
+\caption{Hybrid compilation: a C program containing both scalar and vector operations is split into two compilation paths. The scalar path follows the standard QuantumC pipeline, while the vector path is processed through the VecMat IR. Both paths are merged into a unified quantum module. For hybrid return statements like \texttt{return z + c[0]}, the merge phase emits a new quantum addition (\texttt{q.addi \%z, \%c0}) using the \emph{result\_map} to resolve array element references.}
 \label{fig:hybrid-compilation}
 
 \end{figure*}
