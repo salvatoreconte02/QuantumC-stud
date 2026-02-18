@@ -1,0 +1,153 @@
+\begin{figure*}[t]
+\centering
+
+% ----------------- COLORS -----------------
+\definecolor{scalarcolor}{RGB}{66,133,244}
+\definecolor{vectorcolor}{RGB}{52,168,83}
+\definecolor{mergecolor}{RGB}{171,71,188}
+
+% ----------------- STYLES -----------------
+\tikzset{
+  panelbox/.style={
+    draw=gray!60,
+    rounded corners=4pt,
+    fill=gray!5,
+    inner sep=6pt,
+    minimum width=3.6cm
+  },
+  panellabel/.style={
+    font=\sffamily\bfseries\small,
+    fill=white,
+    inner sep=2pt
+  },
+  flowarrow/.style={
+    ->,
+    >=stealth,
+    line width=1pt,
+    black
+  }
+}
+
+\begin{tikzpicture}[node distance=0.4cm, every node/.style={align=left}]
+
+% ================= PANEL (a) =================
+\node[panelbox] (panelA) {
+\begin{minipage}{3.4cm}
+\begin{lstlisting}[basicstyle=\ttfamily\tiny, frame=none]
+int main() {
+  @\textcolor{scalarcolor}{int x = 5;}@
+  @\textcolor{scalarcolor}{int y = 7;}@
+  @\textcolor{scalarcolor}{int z = x + y;}@
+
+  @\textcolor{vectorcolor}{int a[2] = {1, 2};}@
+  @\textcolor{vectorcolor}{int b[2] = {3, 4};}@
+  @\textcolor{vectorcolor}{int c[2];}@
+
+  @\textcolor{vectorcolor}{for (int i = 0; i < 2;}@
+       @\textcolor{vectorcolor}{i = i + 1) \{}@
+    @\textcolor{vectorcolor}{c[i] = a[i]+b[i];}@
+  @\textcolor{vectorcolor}{\}}@
+
+  @\textcolor{mergecolor}{return z + c[0];}@
+}
+\end{lstlisting}
+\end{minipage}
+};
+\node[panellabel, above=0pt of panelA.north] {(a) C Source};
+
+% ================= PANEL (b) =================
+\node[panelbox, right=0.6cm of panelA] (panelB) {
+\begin{minipage}{3.4cm}
+\textcolor{scalarcolor}{\scriptsize\sffamily\bfseries SCALAR PATH:}
+\begin{lstlisting}[basicstyle=\ttfamily\tiny, frame=none]
+int x = 5;
+int y = 7;
+int z = x + y;
+return z + [ ];
+\end{lstlisting}
+
+\vspace{2pt}
+
+\textcolor{vectorcolor}{\scriptsize\sffamily\bfseries VECTOR PATH:}
+\begin{lstlisting}[basicstyle=\ttfamily\tiny, frame=none]
+VecAdd {
+  lhs: "a" = [1, 2]
+  rhs: "b" = [3, 4]
+  dest: "c", len: 2
+}
+\end{lstlisting}
+\end{minipage}
+};
+\node[panellabel, above=0pt of panelB.north] {(b) Path Separation};
+
+% ================= PANEL (c) =================
+\node[panelbox, right=0.6cm of panelB] (panelC) {
+\begin{minipage}{3.4cm}
+\textcolor{scalarcolor}{\scriptsize\sffamily\bfseries SCALAR QUANTUM MLIR:}
+\begin{lstlisting}[basicstyle=\ttfamily\tiny, frame=none]
+%x = q.init 5
+%y = q.init 7
+%z = q.addi %x, %y
+return %z
+\end{lstlisting}
+
+\vspace{2pt}
+
+\textcolor{vectorcolor}{\scriptsize\sffamily\bfseries VECTOR QUANTUM OPS:}
+\begin{lstlisting}[basicstyle=\ttfamily\tiny, frame=none]
+%a0 = q.init 1
+%a1 = q.init 2
+%b0 = q.init 3
+%b1 = q.init 4
+%c0 = q.addi %a0, %b0
+%c1 = q.addi %a1, %b1
+\end{lstlisting}
+
+\vspace{1pt}
+{\tiny\sffamily result\_map: c[0] $\rightarrow$ \%c0}
+\end{minipage}
+};
+\node[panellabel, above=0pt of panelC.north] {(c) Quantum IRs};
+
+% ================= PANEL (d) =================
+\node[panelbox, right=0.6cm of panelC] (panelD) {
+\begin{minipage}{3.1cm}
+\ttfamily\tiny
+func @main() -> i32 \{\\
+\textcolor{scalarcolor}{\%x = q.init 5}\\
+\textcolor{scalarcolor}{\%y = q.init 7}\\
+\textcolor{scalarcolor}{\%z = q.addi \%x, \%y}\\[2pt]
+
+\textcolor{vectorcolor}{\%a0 = q.init 1}\\
+\textcolor{vectorcolor}{\%a1 = q.init 2}\\
+\textcolor{vectorcolor}{\%b0 = q.init 3}\\
+\textcolor{vectorcolor}{\%b1 = q.init 4}\\
+\textcolor{vectorcolor}{\%c0 = q.addi \%a0,\%b0}\\
+\textcolor{vectorcolor}{\%c1 = q.addi \%a1,\%b1}\\[2pt]
+
+\textcolor{mergecolor}{\%r = q.addi \%z, \%c0}\\
+\textcolor{mergecolor}{return \%r}\\
+\}
+\end{minipage}
+};
+\node[panellabel, above=0pt of panelD.north] {(d) Merged Module};
+
+% ================= ARROWS =================
+\draw[flowarrow] (panelA.east) -- (panelB.west);
+\draw[flowarrow] (panelB.east) -- (panelC.west);
+\draw[flowarrow] (panelC.east) -- (panelD.west);
+
+% ================= LEGEND =================
+\node at ($(panelA.south west)+(0,-0.7cm)$) [anchor=north west] {
+    \scriptsize\sffamily
+    \textcolor{scalarcolor}{$\blacksquare$} Scalar path \quad
+    \textcolor{vectorcolor}{$\blacksquare$} Vector path \quad
+    \textcolor{mergecolor}{$\blacksquare$} Merge point
+};
+
+\end{tikzpicture}
+
+\caption{Hybrid compilation: a C program containing both scalar and vector operations is split into two compilation paths. The scalar path follows the standard QuantumC pipeline, while the vector path is processed through the VecMat IR. Both paths are merged into a unified quantum module, with the \emph{result\_map} resolving array element references (e.g., \texttt{c[0]} $\rightarrow$ \texttt{\%c0}).}
+\label{fig:hybrid-compilation}
+
+\end{figure*}

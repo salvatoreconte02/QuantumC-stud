@@ -17,7 +17,6 @@
     arrow/.style={->, >=stealth, thick}
 ]
 
-% Coordinate assolute per controllo preciso
 % Riga 0: C Source
 \node[mainbox] (source) at (0, 0) {C Source};
 
@@ -28,18 +27,15 @@
 \node[scalarbox] (scalar) at (-2, -2.8) {Scalar Path\\(QuantumC)};
 \node[vecbox] (vecmat) at (2, -2.8) {VecMat IR};
 
-% Riga 3: Scalar -> Quantum MLIR, Vector -> QAR
+% Riga 3: Entrambi producono Quantum MLIR
 \node[scalarbox] (sqmlir) at (-2, -4.4) {Quantum MLIR};
-\node[vecbox] (qar) at (2, -4.4) {QAR};
+\node[vecbox] (vqmlir) at (2, -4.4) {Quantum MLIR};
 
-% Riga 4: Vector -> Quantum Ops (scalar path finito)
-\node[vecbox] (qops) at (2, -6.0) {Quantum Ops};
+% Riga 4: Merge
+\node[mainbox] (merge) at (0, -6.0) {Merge};
 
-% Riga 5: Merge (sotto entrambi i rami)
-\node[mainbox] (merge) at (0, -7.6) {Merge};
-
-% Riga 6: QASM Output
-\node[mainbox] (qasm) at (0, -9.0) {QASM Output};
+% Riga 5: QASM Output
+\node[mainbox] (qasm) at (0, -7.4) {QASM Output};
 
 % === FRECCE ===
 
@@ -53,22 +49,18 @@
 % Scalar path: scalar -> sqmlir
 \draw[arrow] (scalar) -- (sqmlir);
 
-% Vector path: vecmat -> qar -> qops
-\draw[arrow] (vecmat) -- (qar);
-\draw[arrow] (qar) -- (qops);
+% Vector path: vecmat -> vqmlir (lowering diretto)
+\draw[arrow] (vecmat) -- (vqmlir);
 
 % Convergenza verso Merge
-% Da sqmlir: scende, poi va a destra verso merge.west
-\draw[arrow] (sqmlir.south) -- ++(0, -2.4) -| (merge.west);
-
-% Da qops: scende, poi va a sinistra verso merge.east
-\draw[arrow] (qops.south) -- ++(0, -0.8) -| (merge.east);
+\draw[arrow] (sqmlir.south) -- ++(0, -0.8) -| (merge.west);
+\draw[arrow] (vqmlir.south) -- ++(0, -0.8) -| (merge.east);
 
 % Bottom: merge -> qasm
 \draw[arrow] (merge) -- (qasm);
 
 \end{tikzpicture}%
 }
-\caption{Extended QuantumC compilation pipeline.}
+\caption{Extended QuantumC compilation pipeline. The scalar path follows the original QuantumC stages, while the vector/matrix path processes recognized patterns through the VecMat IR with direct lowering to quantum operations.}
 \label{fig:pipeline}
 \end{figure}

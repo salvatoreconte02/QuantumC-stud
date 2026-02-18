@@ -26,7 +26,10 @@
 \usepackage{tabularx}
 \usepackage{array}
 \usepackage{tikz}        % Per diagrammi
-\usetikzlibrary{positioning, arrows.meta, shapes.geometric}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, calc}
+\lstset{
+  escapeinside={@}{@}
+}
 
 %% Configurazione listings per codice C
 \lstdefinestyle{cstyle}{
@@ -36,7 +39,8 @@
     commentstyle=\color{gray},
     frame=none,
     breaklines=true,
-    numbers=none
+    numbers=none,
+    escapeinside={@}{@}
 }
 
 %% Configurazione listings per MLIR/IR
@@ -45,7 +49,8 @@
     keywordstyle=\color{blue},
     frame=none,
     breaklines=true,
-    numbers=none
+    numbers=none,
+    escapeinside={@}{@}
 }
 
 %%
@@ -54,7 +59,7 @@
 \begin{document}
 
 %% Titolo
-\title{Compiling Linear Algebra Workloads from C to Quantum Circuits}
+\title{Compiling Linear Algebra Workloads from C to Quantum Circuits via Multi Level Intermediate Representation}
 
 %% Autori
 \author{Salvatore Pio Conte}
