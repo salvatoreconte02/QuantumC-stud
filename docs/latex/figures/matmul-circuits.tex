@@ -1,0 +1,102 @@
+% Figura: Matrix Multiplication Quantum Circuits
+% Mostra la decomposizione del matmul in operazioni MAC e i due backend (QFT e Cuccaro)
+
+\begin{figure*}[t]
+\centering
+
+% Parte superiore: Formula e decomposizione
+\begin{minipage}{\textwidth}
+\centering
+\textbf{Matrix Multiplication:} $C = A \times B$ \quad where $A, B \in \mathbb{R}^{n \times n}$
+
+\vspace{0.5em}
+$C[i][j] = \sum_{k=0}^{n-1} A[i][k] \cdot B[k][j]$
+
+\vspace{0.3em}
+$\downarrow$ \textit{lowering to quantum MAC operations}
+
+\vspace{0.3em}
+For each element: \texttt{acc += a $\cdot$ b} \quad (multiply-accumulate)
+\end{minipage}
+
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% Parte inferiore: Due circuiti affiancati
+\begin{minipage}{0.48\textwidth}
+\centering
+\textbf{(a) QFT-based addition}
+
+\vspace{0.5em}
+\begin{tikzpicture}
+\begin{yquant*}
+    qubit {$\ket{a}$} a;
+    qubit {$\ket{b}$} b;
+    [name=prod]
+    qubit {$\ket{0}$} prod;
+    qubit {$\ket{acc}$} acc;
+
+    % Moltiplicazione QFT-based
+    box {$\times$} (a, b, prod);
+    text {$\ket{a \cdot b}$} prod;
+
+    % Addizione QFT
+    box {QFT} acc;
+    box {$R_\phi$} (prod, acc);
+    box {IQFT} acc;
+
+    output {$\ket{a}$} a;
+    output {$\ket{b}$} b;
+    output {} prod;
+    output {$\ket{acc'}$} acc;
+\end{yquant*}
+\end{tikzpicture}
+
+\vspace{0.5em}
+\small
+Phase rotations in Fourier basis.\\
+No ancilla for addition.
+\end{minipage}
+\hfill
+\begin{minipage}{0.48\textwidth}
+\centering
+\textbf{(b) Ripple-carry addition (Cuccaro)}
+
+\vspace{0.5em}
+\begin{tikzpicture}
+\begin{yquant*}
+    qubit {$\ket{a}$} a;
+    qubit {$\ket{b}$} b;
+    [name=prod2]
+    qubit {$\ket{0}$} prod;
+    qubit {$\ket{acc}$} acc;
+    qubit {$\ket{0}$} carry;
+
+    % Moltiplicazione (identica, sempre QFT-based)
+    box {$\times$} (a, b, prod);
+    text {$\ket{a \cdot b}$} prod;
+
+    % Addizione Ripple-carry
+    box {MAJ} (prod, acc, carry);
+    box {$\cdots$} (prod, acc, carry);
+    box {UMA} (prod, acc, carry);
+
+    output {$\ket{a}$} a;
+    output {$\ket{b}$} b;
+    output {} prod;
+    output {$\ket{acc'}$} acc;
+    output {$\ket{0}$} carry;
+\end{yquant*}
+\end{tikzpicture}
+
+\vspace{0.5em}
+\small
+Majority/unmajority gates.\\
+Requires 1 ancilla for carry.
+\end{minipage}
+
+\vspace{0.5em}
+\caption{Quantum circuits for matrix multiplication. Each element $C[i][j]$ is computed through $n$ multiply-accumulate (MAC) operations. The multiplication ($\times$) uses QFT-based arithmetic in both backends: QFT on the output register, controlled-controlled phase rotations, then inverse QFT. The difference lies in the addition: (a)~QFT-based performs phase rotations ($R_\phi$) controlled by the addend while the accumulator is in the Fourier basis; (b)~Ripple-carry uses Cuccaro's majority (MAJ) and unmajority (UMA) gates with a carry ancilla qubit.}
+\label{fig:matmul-circuits}
+\end{figure*}

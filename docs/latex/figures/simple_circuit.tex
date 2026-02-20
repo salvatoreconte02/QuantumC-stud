@@ -1,0 +1,27 @@
+\begin{tikzpicture}
+\begin{yquant*}
+    qubit {$\ket{a}=\ket{0}$} a;
+    qubit {$\ket{b}=\ket{0}$} b;
+    qubit {$\ket{res}=\ket{0}$} res;
+   
+  
+    box {$2$} a;
+    text {$\ket{2}$} a;
+    box {$3$} b;
+    text {$\ket{3}$} b;
+    box {$2^{\dagger}$} a;
+    text {$\ket{0}$} a;
+    box {$=$} (a,b);
+    text {$\ket{3}$} a;
+    text {$\ket{3}$} b;
+    box {$+$} (a,b,res);
+    text {$\ket{3}$} a;
+    text {$\ket{3}$} b;
+    text {$\ket{6}$} res;
+    measure res;
+    
+
+   
+\end{yquant*}
+
+\end{tikzpicture}

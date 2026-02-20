@@ -1,17 +1,14 @@
-%%
-%% Extended Compilation Pipeline
-%%
-\section{Extended Compilation Pipeline}
-\label{sec:pipeline}
+\section{Compiling Matrix Operations to a Quantum Circuit}
+In this section, we present our extended MLIR-based compilation pipeline, which enables the translation of matrix operations written in C directly into executable quantum circuits. We introduce our intermediate representations and discuss the design choices behind our implementation.
 
-We extend the QuantumC pipeline with a dedicated path for vector and matrix operations, preserving compatibility with existing scalar compilation. Figure~\ref{fig:pipeline} illustrates the extended architecture. The following subsections detail the pipeline structure, intermediate representations, the pattern recognition and lowering process, and support for hybrid programs.
-
+\subsection{Extended Compilation Pipeline}
 % Figura pipeline
 \input{figures/pipeline}
-
-\subsection{Compilation Pipeline}
 \label{sec:compilation-pipeline}
 
+These constraints are addressed by adopting Static Single Assignment (SSA) form, where each variable is assigned exactly once. Under this model, each variable in the source program is mapped to a dedicated quantum register, and each arithmetic operation becomes a quantum gate (or sequence of gates) that reads from input registers and writes to a fresh output register
+QuantumC~\cite{quantumc} implements this approach using an MLIR-based compilation pipeline~\cite{mlir,xdsl}. The compiler parses C source code, generates an SSA-based intermediate representation, translates arithmetic and control-flow operations into quantum gates, and exports the circuit in OpenQASM~\cite{openqasm} format. However, the current implementation supports only scalar integer operations and does not handle arrays, vectors, or matrices---the gap that our extension addresses.
+We extend the QuantumC pipeline with a dedicated path for vector and matrix operations, preserving compatibility with existing scalar compilation. Figure~\ref{fig:pipeline} illustrates the extended architecture. The following subsections detail the pipeline structure, intermediate representations, the pattern recognition and lowering process, and support for hybrid programs.
 The original QuantumC pipeline processes C programs through five sequential stages, from AST generation to OpenQASM output. Our extension augments this pipeline with a dedicated compilation path for vector and matrix operations, while preserving full compatibility with the existing scalar infrastructure.
 
 The compilation begins with a \emph{pattern recognition} phase that analyzes the C abstract syntax tree to identify vector and matrix computation patterns. When such patterns are detected, they are extracted from the AST and processed through a dedicated \emph{vector/matrix path}, while the remaining scalar code follows the standard QuantumC pipeline.
@@ -20,9 +17,10 @@ In the vector/matrix path, recognized patterns are represented in a high-level \
 
 The two paths converge in a \emph{merge phase} that combines their quantum representations into a unified module. A \emph{result map} tracks the correspondence between high-level array elements and their quantum register assignments, ensuring that return statements and data dependencies are correctly resolved across the two paths.
 
-\subsection{VecMat Intermediate Representation}
+\textbf{VecMat Intermediate Representation}
 \label{sec:intermediate-repr}
 
+\textcolor{red}{mergiare con quella prima }
 To represent vector and matrix operations throughout the compilation process, we introduce a dedicated intermediate representation that integrates into the existing MLIR-based pipeline. The \emph{VecMat IR} captures vector and matrix operations at a high level of abstraction, preserving the semantic meaning of the computation without exposing implementation details.
 
 The representation defines three core operations. \textbf{VecAdd} represents element-wise vector addition, capturing computations of the form $c[i] = a[i] + b[i]$ for $i = 0, \ldots, N-1$. \textbf{VecDot} represents dot product with scalar accumulation, corresponding to $s = \sum_{i=0}^{N-1} a[i] \cdot b[i]$. \textbf{MatMul} represents matrix multiplication $C = A \times B$, where $A$ is $M \times K$, $B$ is $K \times N$, and $C$ is $M \times N$.
@@ -69,8 +67,36 @@ MatMul {
 \label{fig:ir-examples}
 \end{figure}
 
+
+
+
+\subsection{Hybrid Compilation}
+\label{sec:hybrid}
+\input{figures/hybrid-compilation}
+
+Programs may contain both scalar arithmetic and vector/matrix operations. The extended pipeline handles these \emph{hybrid programs} by processing each component through the most appropriate path and then combining the results into a unified quantum module. Figure~\ref{fig:hybrid-compilation} illustrates this process with a concrete example.
+
+% Figura: Hybrid Compilation (path separation and merge)
+
+
+\textbf{Path Separation.} During pattern recognition, loops that match vector or matrix patterns are extracted from the AST and processed through the vector/matrix path. The remaining code---including scalar variable declarations, arithmetic operations, control flow constructs, and return statements---is processed through the standard QuantumC scalar path. This separation ensures that each component is compiled using the most efficient representation.
+
+\textbf{Merge Phase.} After both paths have generated their respective quantum representations, a merge phase combines them into a single quantum module. The merge operates on the scalar module, inserting operations from the vector/matrix module at appropriate locations.
+
+The operations from the vector/matrix path are divided into two categories: \emph{initialization operations} (\texttt{quantum.init}) that allocate and initialize quantum registers, and \emph{arithmetic operations} (\texttt{quantum.addi}, \texttt{quantum.muli}) that perform computations. Initialization operations are inserted at the beginning of the function, grouped with the scalar path's initializations. Arithmetic operations are inserted immediately before the return statement, ensuring that all computations complete before the function returns.
+
+During insertion, SSA values must be remapped: when an operation is cloned from the vector/matrix module into the scalar module, its operands must be updated to reference the cloned registers rather than the original ones. An \emph{SSA map} tracks the correspondence between original and cloned values throughout the merge process.
+
+\textbf{Return Value Resolution.} A key challenge arises when the original C program's return statement references array elements computed by the vector/matrix path. In the simplest case, such as \texttt{return c[2]} for a vector or \texttt{return C[1][0]} for a matrix, the scalar path has no knowledge of the array and generates a placeholder return value initialized to zero. During the merge phase, the compiler detects this placeholder and replaces it with the correct quantum register from the \emph{result map}.
+
+A more complex situation occurs when the return statement combines scalar and array values, as shown in Figure~\ref{fig:hybrid-compilation} with \texttt{return z + c[0]}. Here, the scalar path correctly computes the scalar operand \texttt{z}, but cannot access the array element computed by the vector path. In this case, the compiler extracts a \emph{hybrid return hint} that records both the arithmetic operation and the array element reference. During merge, since the scalar return value is not a placeholder, the compiler emits a new quantum operation to combine the scalar result with the array element looked up from the result map.
+
+To enable this resolution, the compiler extracts \emph{return hints} from the original C AST before path separation. These hints record which array elements, and any associated arithmetic operations, appear in return statements, allowing the merge phase to correctly connect quantum registers across the two compilation paths.
+
+
 \subsection{Pattern Recognition and Lowering}
 \label{sec:pattern-lowering}
+
 
 The pattern recognition phase identifies common vector and matrix computations by analyzing the structure of loop constructs in the C abstract syntax tree. Rather than relying on explicit annotations or library calls, our approach recognizes computation patterns based on their syntactic structure, enabling the compiler to capture high-level semantics that would otherwise be lost through naive loop unrolling.
 
@@ -98,6 +124,28 @@ When a pattern is successfully matched, the corresponding loop is removed from t
 \end{table}
 
 \noindent\textbf{Lowering to Quantum Operations.}
+\label{sec:arith_matrix}
+
+The lowering phase translates high-level VecMat operations into sequences of quantum arithmetic primitives. The key insight is that matrix multiplication decomposes naturally into multiply-accumulate (MAC) operations: computing each element $C[i][j] = \sum_{k=0}^{n-1} A[i][k] \cdot B[k][j]$ requires $n$ multiplications followed by $n$ additions to accumulate the partial products. Figure~\ref{fig:matmul-circuits} illustrates this decomposition and shows how the same MAC operation is implemented using the two arithmetic backends supported by our compiler.
+
+% Figura matmul circuits
+\input{figures/matmul-circuits}
+
+\textbf{Quantum Arithmetic Primitives.}
+\label{sec:quantum-arithmetic}
+Quantum arithmetic subroutines are essential building blocks in many quantum algorithms. In Grover's search~\cite{grover}, arithmetic comparators are used within oracles to mark target states satisfying numerical conditions. Shor's factoring algorithm~\cite{shor} relies on modular exponentiation, which decomposes into sequences of modular additions and multiplications. The HHL algorithm~\cite{hhl} for solving linear systems uses arithmetic operations to manipulate eigenvalues during matrix inversion. More broadly, any quantum algorithm that processes classical data encoded in quantum registers requires arithmetic primitives to manipulate those values.
+
+Addition is the most basic arithmetic operation, and two main approaches exist for its quantum implementation.
+
+\textbf{QFT-based addition.} The approach introduced by Draper~\cite{draper-qft} performs addition in the Fourier basis. The target register is first transformed via the Quantum Fourier Transform (QFT), then the addend is incorporated through controlled phase rotations, and finally the inverse QFT is applied to return to the computational basis. This method does not require ancilla qubits for carry propagation, as the carry information is encoded in the phase of the quantum state.
+
+\textbf{Ripple-carry addition.} The approach proposed by Cuccaro et al.~\cite{cuccaro-ripple} follows the classical model of carry propagation. It uses a sequence of majority and unmajority gates, implemented with Toffoli (CCX) and CNOT gates, to propagate the carry bit through the register. This method requires ancilla qubits to store intermediate carry values but operates entirely in the computational basis without requiring the QFT.
+
+To illustrate, adding $2 + 3$ with 3-qubit registers involves encoding the operands as $|010\rangle$ and $|011\rangle$. The addition circuit---whether QFT-based or ripple-carry---transforms these inputs and produces $|101\rangle$ (decimal 5) in the output register, while preserving the original operands for reversibility.
+
+Other arithmetic operations in our compilation flow are built upon addition. Subtraction is performed via two's complement negation followed by addition. Multiplication can be implemented through repeated additions (shift-and-add) or using QFT-based techniques with controlled-controlled phase rotations.
+
+The two addition approaches present different trade-offs in terms of qubit count, circuit depth, and gate composition. These trade-offs depend on the target hardware characteristics, such as native gate sets and qubit connectivity. Our extended compiler supports both backends, and we present a comparative analysis in Section~\ref{sec:results}.
 The final stage of the vector/matrix path translates VecMat IR operations directly into quantum operations compatible with the QuantumC quantum dialect. This lowering phase performs two key tasks: allocating and initializing quantum registers for array elements, and generating the arithmetic operations that implement the computation.
 
 Each array element is mapped to a dedicated quantum register. For a vector of length $N$, the lowering allocates $N$ registers; for an $M \times N$ matrix, it allocates $M \times N$ registers in row-major order. When compile-time initialization values are available from the constant table, registers are initialized to the corresponding values using \texttt{quantum.init} operations.
@@ -106,24 +154,3 @@ The lowering of VecMat operations proceeds as follows. For VecAdd, the lowering 
 
 During lowering, a \emph{result map} is constructed that associates each array element with its final quantum register. This mapping is essential for the merge phase, which must connect the correct quantum register to return statements that reference array elements.
 
-\subsection{Hybrid Compilation}
-\label{sec:hybrid}
-
-Programs may contain both scalar arithmetic and vector/matrix operations. The extended pipeline handles these \emph{hybrid programs} by processing each component through the most appropriate path and then combining the results into a unified quantum module. Figure~\ref{fig:hybrid-compilation} illustrates this process with a concrete example.
-
-% Figura: Hybrid Compilation (path separation and merge)
-\input{figures/hybrid-compilation}
-
-\textbf{Path Separation.} During pattern recognition, loops that match vector or matrix patterns are extracted from the AST and processed through the vector/matrix path. The remaining code---including scalar variable declarations, arithmetic operations, control flow constructs, and return statements---is processed through the standard QuantumC scalar path. This separation ensures that each component is compiled using the most efficient representation.
-
-\textbf{Merge Phase.} After both paths have generated their respective quantum representations, a merge phase combines them into a single quantum module. The merge operates on the scalar module, inserting operations from the vector/matrix module at appropriate locations.
-
-The operations from the vector/matrix path are divided into two categories: \emph{initialization operations} (\texttt{quantum.init}) that allocate and initialize quantum registers, and \emph{arithmetic operations} (\texttt{quantum.addi}, \texttt{quantum.muli}) that perform computations. Initialization operations are inserted at the beginning of the function, grouped with the scalar path's initializations. Arithmetic operations are inserted immediately before the return statement, ensuring that all computations complete before the function returns.
-
-During insertion, SSA values must be remapped: when an operation is cloned from the vector/matrix module into the scalar module, its operands must be updated to reference the cloned registers rather than the original ones. An \emph{SSA map} tracks the correspondence between original and cloned values throughout the merge process.
-
-\textbf{Return Value Resolution.} A key challenge arises when the original C program's return statement references array elements computed by the vector/matrix path. In the simplest case, such as \texttt{return c[2]} for a vector or \texttt{return C[1][0]} for a matrix, the scalar path has no knowledge of the array and generates a placeholder return value initialized to zero. During the merge phase, the compiler detects this placeholder and replaces it with the correct quantum register from the \emph{result map}.
-
-A more complex situation occurs when the return statement combines scalar and array values, as shown in Figure~\ref{fig:hybrid-compilation} with \texttt{return z + c[0]}. Here, the scalar path correctly computes the scalar operand \texttt{z}, but cannot access the array element computed by the vector path. In this case, the compiler extracts a \emph{hybrid return hint} that records both the arithmetic operation and the array element reference. During merge, since the scalar return value is not a placeholder, the compiler emits a new quantum operation to combine the scalar result with the array element looked up from the result map.
-
-To enable this resolution, the compiler extracts \emph{return hints} from the original C AST before path separation. These hints record which array elements, and any associated arithmetic operations, appear in return statements, allowing the merge phase to correctly connect quantum registers across the two compilation paths.
