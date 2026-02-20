@@ -1,0 +1,82 @@
+% Matrix Multiplication scaling graphs - three side by side
+% Usage: \input{figures/scaling-matmul-graphs}
+
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}
+    \begin{groupplot}[
+      group style={
+        group size=3 by 1,
+        horizontal sep=1.2cm,
+      },
+      width=0.36\textwidth,
+      height=5cm,
+      xlabel={$N$},
+      xmode=log,
+      log basis x={2},
+      xmin=1.5, xmax=12,
+      xtick={2,4,8},
+      xticklabels={2,4,8},
+      legend style={
+        at={(0.5,1.02)},
+        anchor=south,
+        legend columns=2,
+        font=\footnotesize,
+      },
+      grid=major,
+      grid style={gray!30},
+      tick label style={font=\footnotesize},
+      label style={font=\small},
+    ]
+
+    % Graph 1: Qubits
+    \nextgroupplot[
+      ylabel={Qubits},
+      ymode=log,
+      ymin=100, ymax=100000,
+      title={\textbf{(a) Qubit Count}},
+      title style={font=\small},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (2, 232) (4, 1416) (8, 9736)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (2, 816) (4, 6088) (8, 47112)
+    };
+    \legend{QFT, Ripple}
+
+    % Graph 2: Depth
+    \nextgroupplot[
+      ylabel={Depth},
+      ymode=log,
+      ymin=5000, ymax=5000000,
+      title={\textbf{(b) Circuit Depth}},
+      title style={font=\small},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (2, 7119) (4, 14595) (8, 29547)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (2, 57970) (4, 462010) (8, 3694330)
+    };
+
+    % Graph 3: T-count
+    \nextgroupplot[
+      ylabel={T-count},
+      ymode=log,
+      ymin=10000, ymax=100000000,
+      title={\textbf{(c) T-count}},
+      title style={font=\small},
+    ]
+    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+      (2, 1155016) (4, 9240128) (8, 73921024)
+    };
+    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+      (2, 35610) (4, 284810) (8, 2278410)
+    };
+
+    \end{groupplot}
+  \end{tikzpicture}
+  \caption{Scaling behavior of matrix multiplication ($C = A \times B$ for $N \times N$ matrices) with 8-bit integers. Due to $O(N^3)$ complexity, only small matrices are tractable. The ripple-carry backend achieves 32$\times$ lower T-count despite requiring more qubits and depth, making it preferable for fault-tolerant quantum computing where T-gates dominate the cost.}
+  \label{fig:scaling-matmul}
+\end{figure*}

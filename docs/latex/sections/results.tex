@@ -15,27 +15,13 @@ The benchmark suite consists of five representative programs that exercise the e
 \subsection{Compilation Results}
 \label{sec:compilation-results}
 
-Table~\ref{tab:results} presents the compilation results for all benchmarks, comparing both arithmetic backends. All circuits are transpiled to a uniform gate set (CX + single-qubit rotations) to ensure fair comparison. All programs were successfully compiled, demonstrating that the pattern recognition and lowering phases correctly handle the three supported patterns: vector addition, dot product, and matrix multiplication.
+Figures~\ref{fig:scaling-vecadd}, \ref{fig:scaling-vecdot}, and~\ref{fig:scaling-matmul} present the compilation results for all benchmarks, comparing both arithmetic backends across varying problem sizes. All circuits are decomposed to the Clifford+T gate set, the standard basis for fault-tolerant quantum computing. Arbitrary rotations are approximated using Solovay-Kitaev synthesis with $\sim$150 T-gates per rotation (precision $\epsilon = 10^{-15}$)~\cite{ross2014optimal}. All programs were successfully compiled, demonstrating that the pattern recognition and lowering phases correctly handle the three supported patterns: vector addition, dot product, and matrix multiplication.
 
-\begin{table*}[t]
-  \centering
-  \caption{Circuit metrics for vector/matrix benchmarks (uniform gate set)}
-  \label{tab:results}
-  \small
-  \begin{tabular}{lcc|rrrr|rrrr}
-    \toprule
-    & & & \multicolumn{4}{c|}{QFT} & \multicolumn{4}{c}{Ripple-Carry} \\
-    \cmidrule(lr){4-7} \cmidrule(lr){8-11}
-    Benchmark & $N$ & Bits & Qubits & Depth & Gates & CX & Qubits & Depth & Gates & CX \\
-    \midrule
-    vec\_add  & 2 & 4 & 36 & 84 & 357 & 128 & 38 & 92 & 261 & 108 \\
-    vec\_add  & 4 & 4 & 68 & 84 & 710 & 256 & 72 & 92 & 518 & 216 \\
-    vec\_dot  & 2 & 4 & 40 & 650 & 1797 & 864 & 42 & 726 & 1713 & 844 \\
-    matmul    & 2 & 8 & 232 & 7119 & 39061 & 22656 & 240 & 7315 & 36149 & 21584 \\
-    hybrid    & 2 & 4 & 48 & 132 & 702 & 256 & 52 & 182 & 518 & 216 \\
-    \bottomrule
-  \end{tabular}
-\end{table*}
+\input{figures/scaling-vecadd-graphs}
+
+\input{figures/scaling-vecdot-graphs}
+
+\input{figures/scaling-matmul-graphs}
 
 \textbf{Benefits of pattern-based recognition.} The comparison between vector addition at $N=2$ and $N=4$ highlights a key advantage of our pattern-based approach. While qubit count and gate count scale linearly with vector size (doubling from 36 to 68 qubits and from 357 to 710 gates), the circuit depth remains constant at 84. This is possible because our compiler recognizes vector addition as a single high-level operation, rather than treating it as a sequence of independent scalar additions.
 
@@ -59,13 +45,15 @@ The resulting circuit (48 qubits, depth 132) is larger than the pure vector addi
 \subsection{Arithmetic Backend Comparison}
 \label{sec:backend-comparison}
 
-Table~\ref{tab:results} enables direct comparison between the two arithmetic backends. The results reveal that, when using a uniform gate set, the ripple-carry backend produces more compact circuits in terms of total gate count and CX gates, while the QFT backend requires fewer qubits.
+The scaling figures enable direct comparison between the two arithmetic backends using the T-count metric, which is the standard cost measure for fault-tolerant quantum computing where T-gates dominate the resource overhead.
 
-For addition-only workloads (vec\_add and hybrid), ripple-carry circuits use fewer CX gates (108 vs 128 for $N=2$) and fewer total gates (261 vs 357). The QFT backend, however, maintains an advantage in qubit count (36 vs 38) and circuit depth (84 vs 92). This difference arises from the algorithmic structure: QFT-based addition operates in the Fourier basis using controlled phase rotations, which are decomposed into multiple CX gates when transpiled to a uniform gate set. Ripple-carry addition uses explicit carry propagation with Toffoli gates, which decompose more efficiently.
+\textbf{T-count comparison.} The most striking result is the dramatic T-count advantage of the ripple-carry backend. For vector addition (Figure~\ref{fig:scaling-vecadd}c), ripple-carry achieves up to 386$\times$ lower T-count compared to QFT (12,544 vs 4,849,152 at $N=128$). This difference arises because ripple-carry uses only Toffoli gates (each decomposing to exactly 7 T-gates), while QFT relies on arbitrary-angle phase rotations requiring Solovay-Kitaev approximation ($\sim$150 T-gates each).
 
-For multiplication-based operations (vec\_dot, matmul), the situation is similar. Both backends require high CX counts due to the shift-and-add multiplication algorithm, where each partial product addition must be conditionally executed. The ripple-carry backend maintains its advantage in gate count (1713 vs 1797 for vec\_dot), while QFT retains lower qubit requirements (40 vs 42) and depth (650 vs 726).
+For dot product (Figure~\ref{fig:scaling-vecdot}c) and matrix multiplication (Figure~\ref{fig:scaling-matmul}c), ripple-carry maintains a consistent 32$\times$ T-count advantage across all problem sizes.
 
-The choice between backends depends on the optimization target and hardware constraints. When minimizing qubit count is critical, QFT-based arithmetic is preferable. When minimizing gate count or CX operations is the priority, ripple-carry provides better results.
+\textbf{Qubit and depth trade-offs.} The QFT backend requires fewer qubits (Figures~\ref{fig:scaling-vecadd}a, \ref{fig:scaling-vecdot}a, \ref{fig:scaling-matmul}a) because it operates in-place using the Fourier basis, while ripple-carry requires ancilla qubits for carry propagation. For vector addition, QFT also achieves constant depth regardless of $N$ (Figure~\ref{fig:scaling-vecadd}b), exploiting the parallelism of phase rotations.
+
+\textbf{Backend selection criteria.} The choice between backends depends on the target architecture. For near-term NISQ devices where qubit count and depth are limiting factors, QFT may be preferable. For fault-tolerant quantum computers where T-gate cost dominates, ripple-carry is clearly superior despite its higher qubit overhead.
 
 \subsection{Sparsity Optimization}
 \label{sec:sparsity}
