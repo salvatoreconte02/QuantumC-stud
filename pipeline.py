@@ -36,6 +36,7 @@ from step5_quantum_mlir_to_qasm.qasm_generator import (
     generate_circuit,
     export_qasm,
     export_qasm_clifford_t,
+    compute_t_count,
 )
 from step5_quantum_mlir_to_qasm.q_arithmetics import simulate
 from step4_mlir_to_quantum_mlir.quantum_dialect import (
@@ -666,6 +667,11 @@ class CircuitMetrics:
     count_h: int
     count_p: int
     count_rz: int
+    # Metriche Clifford+T (T-count considera decomposizione Solovay-Kitaev)
+    t_count: int              # T-count totale (esatto + approssimato)
+    t_count_exact: int        # T-count da decomposizioni esatte (T, Tdg, Toffoli)
+    t_count_approx: int       # T-count da approssimazioni (rotazioni arbitrarie)
+    arbitrary_rotations: int  # Numero di rotazioni che richiedono approssimazione
     score: float
 
 
@@ -676,7 +682,14 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
       - depth: profondità circuito
       - size: numero istruzioni
       - count_*: conteggi di alcune porte tipiche
+      - t_count: T-count totale (considera decomposizione Clifford+T)
       - score: punteggio unico (più basso = migliore)
+
+    Il T-count considera:
+      - T/Tdg gates: 1 T ciascuno
+      - Toffoli (CCX): 7 T ciascuno (decomposizione esatta)
+      - Rotazioni arbitrarie (Rz, P, CP con angoli non multipli di pi/4):
+        ~150 T ciascuna (approssimazione Solovay-Kitaev con epsilon=10^-15)
     """
     num_qubits = qc.num_qubits
     depth = int(qc.depth())
@@ -692,14 +705,21 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
     count_p = int(counts.get("p", 0))
     count_rz = int(counts.get("rz", 0))
 
+    # Calcola T-count con decomposizione Clifford+T
+    t_metrics = compute_t_count(qc)
+    t_count = t_metrics['t_count']
+    t_count_exact = t_metrics['t_count_exact']
+    t_count_approx = t_metrics['t_count_approx']
+    arbitrary_rotations = t_metrics['arbitrary_rotations']
+
+    # Score basato principalmente su T-count (metrica standard per fault-tolerant QC)
+    # T-count è la metrica più importante per confrontare circuiti Clifford+T
     score = (
         1.00 * num_qubits +
         0.02 * depth +
-        0.01 * size +
-        0.40 * count_cx +
-        0.10 * (count_t + count_tdg) +
-        0.02 * count_h +
-        0.01 * (count_p + count_rz)
+        0.001 * t_count +      # T-count: metrica principale per Clifford+T
+        0.10 * count_cx +      # CX: importante ma meno di T
+        0.01 * count_h         # Clifford gates: costo trascurabile
     )
 
     return CircuitMetrics(
@@ -714,6 +734,10 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
         count_h=count_h,
         count_p=count_p,
         count_rz=count_rz,
+        t_count=t_count,
+        t_count_exact=t_count_exact,
+        t_count_approx=t_count_approx,
+        arbitrary_rotations=arbitrary_rotations,
         score=float(score),
     )
 
@@ -731,6 +755,11 @@ def _print_metrics(m: CircuitMetrics) -> None:
     print(f"h           : {m.count_h}")
     print(f"p           : {m.count_p}")
     print(f"rz          : {m.count_rz}")
+    print("--- Clifford+T metrics ---")
+    print(f"T-count     : {m.t_count} (total)")
+    print(f"  exact     : {m.t_count_exact} (from T/Tdg/Toffoli)")
+    print(f"  approx    : {m.t_count_approx} (from arbitrary rotations)")
+    print(f"  arb. rot. : {m.arbitrary_rotations} (rotations needing ~150 T each)")
     print(f"score       : {m.score:.3f} (lower is better)")
 
 

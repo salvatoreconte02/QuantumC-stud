@@ -335,17 +335,168 @@ def export_qasm(circuit: QuantumCircuit, path: str) -> str:
 
 from qiskit import transpile
 from qiskit.qasm2 import dumps
+import numpy as np
+
+# =============================================================================
+# Clifford+T Decomposition Constants
+# =============================================================================
+# Numero di T-gates per approssimare una rotazione arbitraria (Solovay-Kitaev/gridsynth)
+# con precisione epsilon ~= 10^-15. Formula: T-count ≈ 3 * log2(1/epsilon)
+# Per epsilon = 10^-15: log2(10^15) ≈ 50, quindi 3*50 = 150
+# Riferimento: Ross-Selinger 2014, "Optimal ancilla-free Clifford+T approximation"
+T_GATES_PER_ARBITRARY_ROTATION = 150
+
+# T-gates per decomporre un Toffoli (CCX) - decomposizione esatta standard
+# Riferimento: Nielsen & Chuang, decomposizione con 7 T-gates
+T_GATES_PER_TOFFOLI = 7
+
+# Angoli che sono multipli esatti di pi/4 (nativi in Clifford+T)
+# T = Rz(pi/4), S = Rz(pi/2), Z = Rz(pi)
+CLIFFORD_T_ANGLES = {
+    0: 0,                    # Identity
+    np.pi / 4: 1,            # T gate (1 T)
+    np.pi / 2: 0,            # S gate (Clifford)
+    3 * np.pi / 4: 1,        # T + S (1 T)
+    np.pi: 0,                # Z gate (Clifford)
+    5 * np.pi / 4: 1,        # Tdg + S (1 T)
+    3 * np.pi / 2: 0,        # Sdg (Clifford)
+    7 * np.pi / 4: 1,        # Tdg (1 T)
+    -np.pi / 4: 1,           # Tdg
+    -np.pi / 2: 0,           # Sdg
+    -3 * np.pi / 4: 1,       # Tdg + Sdg
+    -np.pi: 0,               # Z
+}
+
+
+def _is_clifford_angle(angle: float, tolerance: float = 1e-10) -> bool:
+    """Check if angle is a multiple of pi/2 (Clifford gate)."""
+    # Normalizza l'angolo in [0, 2*pi)
+    normalized = angle % (2 * np.pi)
+    # Controlla se è multiplo di pi/2
+    remainder = normalized % (np.pi / 2)
+    return remainder < tolerance or (np.pi / 2 - remainder) < tolerance
+
+
+def _is_t_angle(angle: float, tolerance: float = 1e-10) -> bool:
+    """Check if angle is a multiple of pi/4 (T or Clifford gate)."""
+    normalized = angle % (2 * np.pi)
+    remainder = normalized % (np.pi / 4)
+    return remainder < tolerance or (np.pi / 4 - remainder) < tolerance
+
+
+def _t_count_for_angle(angle: float, tolerance: float = 1e-10) -> int:
+    """
+    Calcola il T-count per approssimare Rz(angle).
+
+    - Se angle è multiplo di pi/2 → 0 T (è Clifford: S, Z, I)
+    - Se angle è multiplo di pi/4 → 1 T (è T o Tdg)
+    - Altrimenti → T_GATES_PER_ARBITRARY_ROTATION (approssimazione)
+    """
+    if _is_clifford_angle(angle, tolerance):
+        return 0
+    if _is_t_angle(angle, tolerance):
+        return 1
+    return T_GATES_PER_ARBITRARY_ROTATION
+
+
+def compute_t_count(circuit: QuantumCircuit) -> dict:
+    """
+    Calcola il T-count totale per un circuito, considerando:
+    - T/Tdg gates: 1 T ciascuno
+    - CCX (Toffoli): 7 T ciascuno
+    - Rz/P/CP con angoli arbitrari: ~150 T ciascuno (approssimazione Solovay-Kitaev)
+    - Rz/P/CP con angoli multipli di pi/4: 0-1 T (esatto)
+
+    Returns:
+        dict con:
+        - t_count: numero totale di T-gates
+        - t_count_exact: T-gates da decomposizioni esatte (T, Tdg, Toffoli)
+        - t_count_approx: T-gates da approssimazioni (rotazioni arbitrarie)
+        - arbitrary_rotations: numero di rotazioni arbitrarie
+    """
+    t_count_exact = 0
+    t_count_approx = 0
+    arbitrary_rotations = 0
+
+    for instruction in circuit.data:
+        gate_name = instruction.operation.name.lower()
+
+        # T e Tdg: esattamente 1 T
+        if gate_name in ('t', 'tdg'):
+            t_count_exact += 1
+
+        # Toffoli (CCX): esattamente 7 T
+        elif gate_name == 'ccx':
+            t_count_exact += T_GATES_PER_TOFFOLI
+
+        # MCX (multi-controlled X): approssimazione basata su numero di controlli
+        elif gate_name == 'mcx':
+            num_controls = len(instruction.qubits) - 1
+            # Decomposizione in Toffoli: O(n) Toffoli per n controlli
+            t_count_exact += (2 * num_controls - 3) * T_GATES_PER_TOFFOLI
+
+        # Gate con parametri (rotazioni)
+        elif gate_name in ('rz', 'p', 'rx', 'ry', 'u1', 'u', 'u3'):
+            if hasattr(instruction.operation, 'params') and instruction.operation.params:
+                # Prendi il primo parametro (l'angolo principale)
+                angle = float(instruction.operation.params[0])
+                t_for_angle = _t_count_for_angle(angle)
+                if t_for_angle == T_GATES_PER_ARBITRARY_ROTATION:
+                    t_count_approx += t_for_angle
+                    arbitrary_rotations += 1
+                else:
+                    t_count_exact += t_for_angle
+
+        # Controlled-phase gates
+        elif gate_name in ('cp', 'crz', 'cu1', 'cphase'):
+            if hasattr(instruction.operation, 'params') and instruction.operation.params:
+                angle = float(instruction.operation.params[0])
+                t_for_angle = _t_count_for_angle(angle)
+                if t_for_angle == T_GATES_PER_ARBITRARY_ROTATION:
+                    t_count_approx += t_for_angle
+                    arbitrary_rotations += 1
+                else:
+                    # Controlled version richiede ~2x per decomposizione
+                    t_count_exact += t_for_angle * 2
+
+        # CCPhase (doubly-controlled phase): ancora più costoso
+        elif gate_name in ('ccphase', 'ccp'):
+            if hasattr(instruction.operation, 'params') and instruction.operation.params:
+                angle = float(instruction.operation.params[0])
+                t_for_angle = _t_count_for_angle(angle)
+                if t_for_angle == T_GATES_PER_ARBITRARY_ROTATION:
+                    # CCPhase con angolo arbitrario
+                    t_count_approx += t_for_angle * 2  # ~2x overhead per doppio controllo
+                    arbitrary_rotations += 1
+                else:
+                    t_count_exact += t_for_angle * 4
+
+    return {
+        't_count': t_count_exact + t_count_approx,
+        't_count_exact': t_count_exact,
+        't_count_approx': t_count_approx,
+        'arbitrary_rotations': arbitrary_rotations,
+    }
 
 
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:
-    """Export the circuit to QASM with uniform gate set for fair comparison."""
+    """
+    Export the circuit to QASM, decomposed to Clifford+T gate set.
+
+    Gate set finale: {H, S, Sdg, T, Tdg, X, Y, Z, CX}
+
+    Nota: le rotazioni arbitrarie vengono lasciate come RZ nel QASM per simulazione,
+    ma il T-count viene calcolato separatamente assumendo decomposizione Solovay-Kitaev.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # Gate set uniforme: decompone tutti i gate a 2-qubit in CX
-    uniform_basis = ["cx", "rz", "sx", "x", "measure"]
-    transpiled = transpile(circuit, basis_gates=uniform_basis, optimization_level=3)
+    # Prima trasportiamo verso un gate set che includa T
+    # Nota: Qiskit non fa automaticamente Solovay-Kitaev, quindi usiamo
+    # un gate set intermedio e calcoliamo il T-count separatamente
+    clifford_t_basis = ["h", "s", "sdg", "t", "tdg", "x", "y", "z", "cx", "rz", "measure"]
+    transpiled = transpile(circuit, basis_gates=clifford_t_basis, optimization_level=3)
 
     with open(path, "w") as f:
         f.write(dumps(transpiled))
-    print(f"✅ QASM written to: {path}")
+    print(f"✅ QASM (Clifford+T basis) written to: {path}")
     return path
