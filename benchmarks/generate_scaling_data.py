@@ -91,6 +91,7 @@ def compile_and_get_metrics(c_code: str, adder: str) -> dict:
             'qubits': 0,
             'depth': 0,
             't_count': 0,
+            't_depth': 0,
             'arb_rot': 0,
         }
 
@@ -103,6 +104,10 @@ def compile_and_get_metrics(c_code: str, adder: str) -> dict:
                 # T-count     : 123 (total)
                 val = line.split(':')[1].split('(')[0].strip()
                 metrics['t_count'] = int(val)
+            elif 'T-depth' in line and 'layers' in line:
+                # T-depth     : 123 (layers with T-gates)
+                val = line.split(':')[1].split('(')[0].strip()
+                metrics['t_depth'] = int(val)
             elif 'arb. rot.' in line:
                 val = line.split(':')[1].split('(')[0].strip()
                 metrics['arb_rot'] = int(val)

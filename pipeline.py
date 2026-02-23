@@ -37,6 +37,7 @@ from step5_quantum_mlir_to_qasm.qasm_generator import (
     export_qasm,
     export_qasm_clifford_t,
     compute_t_count,
+    compute_t_depth,
 )
 from step5_quantum_mlir_to_qasm.q_arithmetics import simulate
 from step4_mlir_to_quantum_mlir.quantum_dialect import (
@@ -671,6 +672,7 @@ class CircuitMetrics:
     t_count: int              # T-count totale (esatto + approssimato)
     t_count_exact: int        # T-count da decomposizioni esatte (T, Tdg, Toffoli)
     t_count_approx: int       # T-count da approssimazioni (rotazioni arbitrarie)
+    t_depth: int              # T-depth: numero di strati con T-gates
     arbitrary_rotations: int  # Numero di rotazioni che richiedono approssimazione
     score: float
 
@@ -712,6 +714,9 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
     t_count_approx = t_metrics['t_count_approx']
     arbitrary_rotations = t_metrics['arbitrary_rotations']
 
+    # Calcola T-depth (numero di strati con T-gates)
+    t_depth = compute_t_depth(qc)
+
     # Score basato principalmente su T-count (metrica standard per fault-tolerant QC)
     # T-count è la metrica più importante per confrontare circuiti Clifford+T
     score = (
@@ -737,6 +742,7 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
         t_count=t_count,
         t_count_exact=t_count_exact,
         t_count_approx=t_count_approx,
+        t_depth=t_depth,
         arbitrary_rotations=arbitrary_rotations,
         score=float(score),
     )
@@ -759,6 +765,7 @@ def _print_metrics(m: CircuitMetrics) -> None:
     print(f"T-count     : {m.t_count} (total)")
     print(f"  exact     : {m.t_count_exact} (from T/Tdg/Toffoli)")
     print(f"  approx    : {m.t_count_approx} (from arbitrary rotations)")
+    print(f"T-depth     : {m.t_depth} (layers with T-gates)")
     print(f"  arb. rot. : {m.arbitrary_rotations} (rotations needing ~150 T each)")
     print(f"score       : {m.score:.3f} (lower is better)")
 

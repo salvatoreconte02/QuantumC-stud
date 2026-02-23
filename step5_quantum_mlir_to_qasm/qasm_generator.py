@@ -479,6 +479,57 @@ def compute_t_count(circuit: QuantumCircuit) -> dict:
     }
 
 
+def compute_t_depth(circuit: QuantumCircuit) -> int:
+    """
+    Calcola il T-depth del circuito: numero di strati che contengono almeno un T-gate.
+
+    In un computer fault-tolerant, i gate Clifford sono "gratuiti" mentre i T-gate
+    richiedono magic state distillation. Il T-depth rappresenta il tempo critico.
+
+    Considera come "T-layer":
+    - Strati con T o Tdg gates
+    - Strati con CCX (Toffoli) che si decompone in 7 T
+    - Strati con rotazioni arbitrarie (approssimate con ~150 T)
+    """
+    from qiskit.converters import circuit_to_dag
+
+    dag = circuit_to_dag(circuit)
+    t_depth = 0
+
+    for layer in dag.layers():
+        has_t_gate = False
+        for node in layer['graph'].op_nodes():
+            gate_name = node.op.name.lower()
+
+            # T e Tdg diretti
+            if gate_name in ('t', 'tdg'):
+                has_t_gate = True
+                break
+
+            # Toffoli (CCX) si decompone in T-gates
+            if gate_name == 'ccx':
+                has_t_gate = True
+                break
+
+            # MCX si decompone in Toffoli che contengono T
+            if gate_name == 'mcx':
+                has_t_gate = True
+                break
+
+            # Rotazioni con angoli non-Clifford
+            if gate_name in ('rz', 'p', 'rx', 'ry', 'u1', 'u', 'u3', 'cp', 'crz'):
+                if hasattr(node.op, 'params') and node.op.params:
+                    angle = float(node.op.params[0])
+                    if not _is_clifford_angle(angle):
+                        has_t_gate = True
+                        break
+
+        if has_t_gate:
+            t_depth += 1
+
+    return t_depth
+
+
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:
     """
     Export the circuit to QASM, decomposed to Clifford+T gate set.
