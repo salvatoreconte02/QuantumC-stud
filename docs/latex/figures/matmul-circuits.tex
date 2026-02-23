@@ -1,102 +1,134 @@
 % Figura: Matrix Multiplication Quantum Circuits
-% Mostra la decomposizione del matmul in operazioni MAC e i due backend (QFT e Cuccaro)
+% Mostra la struttura riga × colonna completa per un elemento
 
 \begin{figure*}[t]
 \centering
 
-% Parte superiore: Formula e decomposizione
-\begin{minipage}{\textwidth}
-\centering
-\textbf{Matrix Multiplication:} $C = A \times B$ \quad where $A, B \in \mathbb{R}^{n \times n}$
+% Parte superiore: Visualizzazione riga × colonna
+\begin{tikzpicture}[
+    cell/.style={draw, minimum size=7mm, anchor=center},
+    hlcell/.style={cell, fill=blue!20},
+    matlabel/.style={font=\bfseries}
+]
 
-\vspace{0.5em}
-$C[i][j] = \sum_{k=0}^{n-1} A[i][k] \cdot B[k][j]$
+% Matrice A
+\node[hlcell] (a00) at (0,0) {$a_{00}$};
+\node[hlcell, right=-\pgflinewidth of a00] (a01) {$a_{01}$};
+\node[cell, below=-\pgflinewidth of a00] (a10) {$a_{10}$};
+\node[cell, right=-\pgflinewidth of a10] (a11) {$a_{11}$};
+\node[matlabel, above=2mm of a00.north east] {$A$};
 
+% Simbolo ×
+\node[right=6mm of a01, font=\Large] (times) {$\times$};
+
+% Matrice B
+\node[cell, right=12mm of a01] (b00) {$b_{00}$};
+\node[hlcell, right=-\pgflinewidth of b00] (b01) {$b_{01}$};
+\node[cell, below=-\pgflinewidth of b00] (b10) {$b_{10}$};
+\node[hlcell, right=-\pgflinewidth of b10] (b11) {$b_{11}$};
+\node[matlabel, above=2mm of b00.north east] {$B$};
+
+% Simbolo =
+\node[right=6mm of b01, font=\Large] (eq) {$=$};
+
+% Matrice C
+\node[cell, right=12mm of b01] (c00) {$c_{00}$};
+\node[hlcell, right=-\pgflinewidth of c00] (c01) {$c_{01}$};
+\node[cell, below=-\pgflinewidth of c00] (c10) {$c_{10}$};
+\node[cell, right=-\pgflinewidth of c10] (c11) {$c_{11}$};
+\node[matlabel, above=2mm of c00.north east] {$C$};
+
+% Formula esplicita
+\node[right=10mm of c01, align=left, font=\small] {
+    $c_{01} = a_{00} \cdot b_{01} + a_{01} \cdot b_{11}$\\[2pt]
+    \textit{(row 0 $\times$ column 1)}
+};
+
+\end{tikzpicture}
+
+\vspace{0.6em}
+
+{\small $\downarrow$ \textit{quantum circuit for computing $c_{01}$}}
+
+\vspace{0.4em}
+
+% Circuito QFT completo
+\textbf{(a) QFT-based backend}
 \vspace{0.3em}
-$\downarrow$ \textit{lowering to quantum MAC operations}
 
-\vspace{0.3em}
-For each element: \texttt{acc += a $\cdot$ b} \quad (multiply-accumulate)
-\end{minipage}
-
-\vspace{1em}
-\hrule
-\vspace{1em}
-
-% Parte inferiore: Due circuiti affiancati
-\begin{minipage}{0.48\textwidth}
-\centering
-\textbf{(a) QFT-based addition}
-
-\vspace{0.5em}
 \begin{tikzpicture}
 \begin{yquant*}
-    qubit {$\ket{a}$} a;
-    qubit {$\ket{b}$} b;
-    [name=prod]
-    qubit {$\ket{0}$} prod;
-    qubit {$\ket{acc}$} acc;
+    qubit {$\ket{a_{00}}$} a00;
+    qubit {$\ket{b_{01}}$} b01;
+    qubit {$\ket{a_{01}}$} a01;
+    qubit {$\ket{b_{11}}$} b11;
+    qubit {$\ket{0}$} acc;
 
-    % Moltiplicazione QFT-based
-    box {$\times$} (a, b, prod);
-    text {$\ket{a \cdot b}$} prod;
-
-    % Addizione QFT
+    % MAC #1: a00 × b01 → acc (QFT multiplication + QFT addition)
     box {QFT} acc;
-    box {$R_\phi$} (prod, acc);
+    box {$CC\text{-}R_\phi$} (a00, b01, acc);
+    box {$R_\phi$} acc;
     box {IQFT} acc;
 
-    output {$\ket{a}$} a;
-    output {$\ket{b}$} b;
-    output {} prod;
-    output {$\ket{acc'}$} acc;
+    % MAC #2: a01 × b11 → acc
+    box {QFT} acc;
+    box {$CC\text{-}R_\phi$} (a01, b11, acc);
+    box {$R_\phi$} acc;
+    box {IQFT} acc;
+
+    output {$\ket{a_{00}}$} a00;
+    output {$\ket{b_{01}}$} b01;
+    output {$\ket{a_{01}}$} a01;
+    output {$\ket{b_{11}}$} b11;
+    output {$\ket{c_{01}}$} acc;
 \end{yquant*}
 \end{tikzpicture}
 
-\vspace{0.5em}
-\small
-Phase rotations in Fourier basis.\\
-No ancilla for addition.
-\end{minipage}
-\hfill
-\begin{minipage}{0.48\textwidth}
-\centering
-\textbf{(b) Ripple-carry addition (Cuccaro)}
+{\footnotesize Multiplication via controlled-controlled phase rotations ($CC\text{-}R_\phi$); addition via controlled phase rotations ($R_\phi$).}
 
 \vspace{0.5em}
+
+% Circuito Ripple-carry completo
+\textbf{(b) Ripple-carry backend}
+\vspace{0.3em}
+
 \begin{tikzpicture}
 \begin{yquant*}
-    qubit {$\ket{a}$} a;
-    qubit {$\ket{b}$} b;
-    [name=prod2]
-    qubit {$\ket{0}$} prod;
-    qubit {$\ket{acc}$} acc;
-    qubit {$\ket{0}$} carry;
+    qubit {$\ket{a_{00}}$} a00;
+    qubit {$\ket{b_{01}}$} b01;
+    qubit {$\ket{a_{01}}$} a01;
+    qubit {$\ket{b_{11}}$} b11;
+    qubit {$\ket{0}$} acc;
+    qubit {$\ket{0}$} anc;
 
-    % Moltiplicazione (identica, sempre QFT-based)
-    box {$\times$} (a, b, prod);
-    text {$\ket{a \cdot b}$} prod;
+    % MAC #1: a00 × b01 → acc (shift-and-add multiplication + ripple addition)
+    box {shift} (a00, acc);
+    box {C-ADD} (b01, acc, anc);
+    box {MAJ} (acc, anc);
+    box {$\cdots$} (acc, anc);
+    box {UMA} (acc, anc);
 
-    % Addizione Ripple-carry
-    box {MAJ} (prod, acc, carry);
-    box {$\cdots$} (prod, acc, carry);
-    box {UMA} (prod, acc, carry);
+    % MAC #2: a01 × b11 → acc
+    box {shift} (a01, acc);
+    box {C-ADD} (b11, acc, anc);
+    box {MAJ} (acc, anc);
+    box {$\cdots$} (acc, anc);
+    box {UMA} (acc, anc);
 
-    output {$\ket{a}$} a;
-    output {$\ket{b}$} b;
-    output {} prod;
-    output {$\ket{acc'}$} acc;
-    output {$\ket{0}$} carry;
+    output {$\ket{a_{00}}$} a00;
+    output {$\ket{b_{01}}$} b01;
+    output {$\ket{a_{01}}$} a01;
+    output {$\ket{b_{11}}$} b11;
+    output {$\ket{c_{01}}$} acc;
+    output {$\ket{0}$} anc;
 \end{yquant*}
 \end{tikzpicture}
 
-\vspace{0.5em}
-\small
-Majority/unmajority gates.\\
-Requires 1 ancilla for carry.
-\end{minipage}
+{\footnotesize Multiplication via shift-and-add with controlled ripple addition (C-ADD); addition via majority (MAJ) and unmajority (UMA) gates.}
 
-\vspace{0.5em}
-\caption{Quantum circuits for matrix multiplication. Each element $C[i][j]$ is computed through $n$ multiply-accumulate (MAC) operations. The multiplication ($\times$) uses QFT-based arithmetic in both backends: QFT on the output register, controlled-controlled phase rotations, then inverse QFT. The difference lies in the addition: (a)~QFT-based performs phase rotations ($R_\phi$) controlled by the addend while the accumulator is in the Fourier basis; (b)~Ripple-carry uses Cuccaro's majority (MAJ) and unmajority (UMA) gates with a carry ancilla qubit.}
+\vspace{0.4em}
+{\small $\vdots$ \textit{repeated for each element $c_{ij}$ using row $i$ of $A$ and column $j$ of $B$}}
+
+\caption{Quantum circuits for matrix multiplication. To compute element $c_{01}$, the circuit performs two multiply-accumulate (MAC) operations using row~0 of $A$ ($a_{00}, a_{01}$) and column~1 of $B$ ($b_{01}, b_{11}$). The two backends differ in both multiplication and addition: (a)~QFT-based uses controlled-controlled phase rotations for multiplication and controlled phase rotations for addition, all operating in the Fourier basis; (b)~Ripple-carry uses shift-and-add for multiplication and Cuccaro's majority/unmajority gates for addition, requiring ancilla qubits. This structure repeats for each output element $c_{ij}$.}
 \label{fig:matmul-circuits}
 \end{figure*}
