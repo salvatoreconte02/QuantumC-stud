@@ -9,6 +9,8 @@ import subprocess
 import time
 from copy import deepcopy
 from dataclasses import dataclass
+import numpy as np
+from qiskit import transpile
 
 from xdsl.dialects.builtin import ModuleOp, i32
 from xdsl.printer import Printer
@@ -679,52 +681,91 @@ class CircuitMetrics:
 
 def _compute_metrics_and_score(qc) -> CircuitMetrics:
     """
-    Calcola metriche semplici, deterministiche e confrontabili:
-      - num_qubits: numero qubit
-      - depth: profondità circuito
-      - size: numero istruzioni
-      - count_*: conteggi di alcune porte tipiche
-      - t_count: T-count totale (considera decomposizione Clifford+T)
-      - score: punteggio unico (più basso = migliore)
+    Calcola metriche dal circuito dopo transpile a Clifford+T basis.
 
-    Il T-count considera:
-      - T/Tdg gates: 1 T ciascuno
-      - Toffoli (CCX): 7 T ciascuno (decomposizione esatta)
-      - Rotazioni arbitrarie (Rz, P, CP con angoli non multipli di pi/4):
-        ~150 T ciascuna (approssimazione Solovay-Kitaev con epsilon=10^-15)
+    FLUSSO UNIFICATO (come richiesto dal tutor):
+      1. Transpile a Clifford+T: {H, S, Sdg, T, Tdg, CX, Rz}
+      2. Calcola TUTTE le metriche dal circuito transpilato
+      3. T-count = T + Tdg + Rz_t_angle + 150*Rz_arbitrari
+
+    Questo garantisce che QFT e Ripple siano confrontati sullo stesso gate set.
+
+    Riferimento T-count: Ross-Selinger 2014, ~150 T per rotazione arbitraria
+    con precisione epsilon=10^-15.
     """
-    num_qubits = qc.num_qubits
-    depth = int(qc.depth())
-    size = int(qc.size())
+    # ==========================================================================
+    # STEP 1: Transpile a Clifford+T basis
+    # ==========================================================================
+    CLIFFORD_T_BASIS = ['h', 's', 'sdg', 't', 'tdg', 'cx', 'rz']
+    transpiled = transpile(qc, basis_gates=CLIFFORD_T_BASIS, optimization_level=3)
 
-    counts = qc.count_ops()
+    # ==========================================================================
+    # STEP 2: Calcola metriche dal circuito transpilato
+    # ==========================================================================
+    num_qubits = transpiled.num_qubits
+    depth = int(transpiled.depth())
+    size = int(transpiled.size())
+
+    counts = transpiled.count_ops()
     count_ops_total = int(sum(int(v) for v in counts.values()))
     count_cx = int(counts.get("cx", 0))
-
     count_t = int(counts.get("t", 0))
     count_tdg = int(counts.get("tdg", 0))
     count_h = int(counts.get("h", 0))
     count_p = int(counts.get("p", 0))
     count_rz = int(counts.get("rz", 0))
 
-    # Calcola T-count con decomposizione Clifford+T
-    t_metrics = compute_t_count(qc)
-    t_count = t_metrics['t_count']
-    t_count_exact = t_metrics['t_count_exact']
-    t_count_approx = t_metrics['t_count_approx']
-    arbitrary_rotations = t_metrics['arbitrary_rotations']
+    # ==========================================================================
+    # STEP 3: Calcola T-count analizzando i gate Rz
+    # ==========================================================================
+    T_GATES_PER_ARBITRARY_ROTATION = 150
 
-    # Calcola T-depth (numero di strati con T-gates)
-    t_depth = compute_t_depth(qc)
+    def _is_clifford_angle(angle: float, tol: float = 1e-10) -> bool:
+        """Multiplo di pi/2 → Clifford (S, Z, I) → 0 T"""
+        normalized = angle % (2 * np.pi)
+        remainder = normalized % (np.pi / 2)
+        return remainder < tol or (np.pi / 2 - remainder) < tol
 
-    # Score basato principalmente su T-count (metrica standard per fault-tolerant QC)
-    # T-count è la metrica più importante per confrontare circuiti Clifford+T
+    def _is_t_angle(angle: float, tol: float = 1e-10) -> bool:
+        """Multiplo di pi/4 → T gate → 1 T"""
+        normalized = angle % (2 * np.pi)
+        remainder = normalized % (np.pi / 4)
+        return remainder < tol or (np.pi / 4 - remainder) < tol
+
+    # Conta T-gates espliciti
+    t_count_exact = count_t + count_tdg
+
+    # Analizza i gate Rz
+    rz_clifford = 0      # multipli di pi/2 → 0 T
+    rz_t_angle = 0       # multipli di pi/4 → 1 T
+    rz_arbitrary = 0     # altri angoli → 150 T
+
+    for inst in transpiled.data:
+        if inst.operation.name == 'rz':
+            angle = float(inst.operation.params[0])
+            if _is_clifford_angle(angle):
+                rz_clifford += 1
+            elif _is_t_angle(angle):
+                rz_t_angle += 1
+            else:
+                rz_arbitrary += 1
+
+    t_count_exact += rz_t_angle
+    t_count_approx = rz_arbitrary * T_GATES_PER_ARBITRARY_ROTATION
+    t_count = t_count_exact + t_count_approx
+    arbitrary_rotations = rz_arbitrary
+
+    # T-depth: conta i layer che contengono T-gates o Rz non-Clifford
+    # (semplificato: usa il DAG per contare)
+    t_depth = compute_t_depth(transpiled)
+
+    # Score basato principalmente su T-count
     score = (
         1.00 * num_qubits +
         0.02 * depth +
-        0.001 * t_count +      # T-count: metrica principale per Clifford+T
-        0.10 * count_cx +      # CX: importante ma meno di T
-        0.01 * count_h         # Clifford gates: costo trascurabile
+        0.001 * t_count +
+        0.10 * count_cx +
+        0.01 * count_h
     )
 
     return CircuitMetrics(
