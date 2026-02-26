@@ -479,6 +479,22 @@ def compute_t_count(circuit: QuantumCircuit) -> dict:
     }
 
 
+def _is_t_gate_node(node) -> bool:
+    """Controlla se un nodo DAG contiene un T-gate (o equivalente)."""
+    gate_name = node.op.name.lower()
+
+    if gate_name in ('t', 'tdg', 'ccx', 'mcx'):
+        return True
+
+    if gate_name in ('rz', 'p', 'rx', 'ry', 'u1', 'u', 'u3', 'cp', 'crz'):
+        if hasattr(node.op, 'params') and node.op.params:
+            angle = float(node.op.params[0])
+            if not _is_clifford_angle(angle):
+                return True
+
+    return False
+
+
 def compute_t_depth(circuit: QuantumCircuit) -> int:
     """
     Calcola il T-depth del circuito: numero di strati che contengono almeno un T-gate.
@@ -486,48 +502,30 @@ def compute_t_depth(circuit: QuantumCircuit) -> int:
     In un computer fault-tolerant, i gate Clifford sono "gratuiti" mentre i T-gate
     richiedono magic state distillation. Il T-depth rappresenta il tempo critico.
 
-    Considera come "T-layer":
-    - Strati con T o Tdg gates
-    - Strati con CCX (Toffoli) che si decompone in 7 T
-    - Strati con rotazioni arbitrarie (approssimate con ~150 T)
+    Usa ASAP scheduling sul DAG per assegnare layer senza generare copie
+    del grafo (molto più veloce di dag.layers() su circuiti grandi).
     """
     from qiskit.converters import circuit_to_dag
 
     dag = circuit_to_dag(circuit)
-    t_depth = 0
 
-    for layer in dag.layers():
-        has_t_gate = False
-        for node in layer['graph'].op_nodes():
-            gate_name = node.op.name.lower()
+    # ASAP scheduling: assegna a ogni nodo il layer più basso possibile
+    node_layer = {}
+    t_layers = set()
 
-            # T e Tdg diretti
-            if gate_name in ('t', 'tdg'):
-                has_t_gate = True
-                break
+    for node in dag.topological_op_nodes():
+        # Il layer di questo nodo = max(layer dei predecessori) + 1
+        max_pred = -1
+        for pred in dag.predecessors(node):
+            if pred in node_layer:
+                max_pred = max(max_pred, node_layer[pred])
+        layer = max_pred + 1
+        node_layer[node] = layer
 
-            # Toffoli (CCX) si decompone in T-gates
-            if gate_name == 'ccx':
-                has_t_gate = True
-                break
+        if _is_t_gate_node(node):
+            t_layers.add(layer)
 
-            # MCX si decompone in Toffoli che contengono T
-            if gate_name == 'mcx':
-                has_t_gate = True
-                break
-
-            # Rotazioni con angoli non-Clifford
-            if gate_name in ('rz', 'p', 'rx', 'ry', 'u1', 'u', 'u3', 'cp', 'crz'):
-                if hasattr(node.op, 'params') and node.op.params:
-                    angle = float(node.op.params[0])
-                    if not _is_clifford_angle(angle):
-                        has_t_gate = True
-                        break
-
-        if has_t_gate:
-            t_depth += 1
-
-    return t_depth
+    return len(t_layers)
 
 
 def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:

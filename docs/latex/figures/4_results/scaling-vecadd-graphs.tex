@@ -1,5 +1,5 @@
-% Matrix Multiplication scaling graphs - three side by side
-% Usage: \input{figures/scaling-matmul-graphs}
+% Vector Addition scaling graphs - three side by side
+% Usage: \input{latex/figures/4_results/scaling-vecadd-graphs}
 
 \begin{tikzpicture}
   \begin{groupplot}[
@@ -12,9 +12,9 @@
     xlabel={$N$},
     xmode=log,
     log basis x={2},
-    xmin=1.5, xmax=12,
-    xtick={2,4,8},
-    xticklabels={2,4,8},
+    xmin=1.5, xmax=192,
+    xtick={2,4,8,16,32,64,128},
+    xticklabels={2,4,8,16,32,64,128},
     legend style={
       at={(0.5,1.02)},
       anchor=south,
@@ -27,50 +27,49 @@
     label style={font=\small},
   ]
 
-  % Graph 1: Qubits
+  % Graph 1: Qubits (log scale)
   \nextgroupplot[
     ylabel={Qubits},
     ymode=log,
-    ymin=100, ymax=100000,
+    ymin=50, ymax=6000,
     title={\textbf{(a) Qubit Count}},
     title style={font=\small},
   ]
   \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-    (2, 232) (4, 1416) (8, 9736)
+    (2, 72) (4, 136) (8, 264) (16, 520) (32, 1032) (64, 2056) (128, 4104)
   };
   \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-    (2, 816) (4, 6088) (8, 47112)
+    (2, 74) (4, 140) (8, 272) (16, 536) (32, 1064) (64, 2120) (128, 4232)
   };
   \legend{QFT, Ripple}
 
-  % Graph 2: T-depth
+  % Graph 2: T-depth (linear scale, values are nearly constant)
   \nextgroupplot[
     ylabel={T-depth},
-    ymode=log,
-    ymin=2000, ymax=3000000,
+    ymin=30, ymax=280,
     title={\textbf{(b) T-depth}},
     title style={font=\small},
   ]
   \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-    (2, 3911) (4, 12124) (8, 27611)
+    (2, 225) (4, 225) (8, 225) (16, 225) (32, 225) (64, 225) (128, 225)
   };
   \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-    (2, 29324) (4, 234298) (8, 1874270)
+    (2, 70) (4, 70) (8, 70) (16, 70) (32, 70) (64, 70) (128, 70)
   };
 
   % Graph 3: T-count
   \nextgroupplot[
     ylabel={T-count},
     ymode=log,
-    ymin=10000, ymax=100000000,
+    ymin=100, ymax=10000000,
     title={\textbf{(c) T-count}},
     title style={font=\small},
   ]
   \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-    (2, 1288775) (4, 10321227) (8, 82614075)
+    (2, 78405) (4, 157711) (8, 316323) (16, 633547) (32, 1267995) (64, 2536891) (128, 5074683)
   };
   \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-    (2, 32426) (4, 259338) (8, 2074634)
+    (2, 168) (4, 336) (8, 672) (16, 1344) (32, 2688) (64, 5376) (128, 10752)
   };
 
   \end{groupplot}

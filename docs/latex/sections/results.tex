@@ -4,67 +4,91 @@
 \section{Results and Discussion}
 \label{sec:results}
 
-This section presents the experimental evaluation of our extended QuantumC compiler. We first describe the experimental setup and benchmark suite, then analyze the compilation results for vector and matrix operations. We compare the two arithmetic backends (QFT-based and ripple-carry) and demonstrate the effectiveness of our compile-time sparsity optimization, which reduces circuit complexity when input matrices contain zero elements.
+This section presents the experimental evaluation of our extended compilation toolchain.
+We first describe the experimental setup and the benchmark suite, and then analyze the compilation results for vector and matrix operations using two arithmetic backends (QFT and ripple-carry).
+Finally, we demonstrate the effectiveness of our compile-time sparsity optimization, which reduces the overall quantum circuit complexity.
 
 \subsection{Experimental Setup}
 \label{sec:setup}
-We evaluate the extended QuantumC compiler using the following configuration. The C source programs are parsed using Clang~\cite{clang} to produce JSON abstract syntax trees. The MLIR generation and dialect definitions rely on xDSL~\cite{xdsl}, a Python-native compiler toolkit that supports progressive lowering. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit}. All experiments were executed on a MacBook Pro equipped with an Apple M3 Pro chip (11 cores) and 18\,GB of RAM, running macOS with Python 3.12.
+The C source programs are parsed using Clang~\cite{clang} to generate the AST.
+MLIR generation and dialect definitions are implemented using xDSL~\cite{xdsl}, a Python‑native compiler toolkit. The resulting quantum circuits are synthesized and validated using the Qiskit SDK~\cite{qiskit} \textcolor{red}{version to be inserted}.
+All experiments were executed on a machine equipped with an Apple M3 Pro chip (11 cores) and 18,GB of RAM, running macOS and Python~3.12.
 
-The benchmark suite consists of five representative programs that exercise the extended compilation capabilities: two vector addition programs with different sizes ($N=2$ and $N=4$), a dot product computation, a $2 \times 2$ matrix multiplication, and a hybrid program combining scalar arithmetic with vector operations. All benchmarks use 4-bit integer representation, except for matrix multiplication which requires 8 bits to accommodate the range of computed values.
-
+%
+%The benchmark suite consists of five representative programs that exercise the extended compilation %capabilities: two vector addition programs with different sizes ($N=2$ and $N=4$), a dot product computation, %a $2 \times 2$ matrix multiplication, and a hybrid program combining scalar arithmetic with vector %operations. All benchmarks use 4-bit integer representation, except for matrix multiplication which requires %8 bits to accommodate the range of computed values.
+'''
 \subsection{Compilation Results}
 \label{sec:compilation-results}
 
+\begin{figure*}[!t]
+   \centering
+   \input{latex/figures/4_results/scaling-vecadd-graphs}
+   \caption{Scaling behavior of vector addition ($c[i] = a[i] + b[i]$) with 8-bit integers. Both T-depth and qubit count remain constant across $N$ since all additions operate on disjoint qubits and are parallelized. Ripple-carry achieves ${\sim}3\times$ lower T-depth and up to $470\times$ lower T-count because it uses only exact Clifford+T gates, while QFT requires arbitrary rotation synthesis.}
+  \label{fig:scaling-vecadd}
+\end{figure*}
+
+
+\begin{figure*}[t]
+   \centering
+   \input{figures/scaling-vecdot-graphs}
+   \caption{Scaling behavior of dot product ($s = \sum_i a[i] \cdot b[i]$) with 8-bit integers. The ripple-carry backend requires more qubits due to ancilla allocation but achieves ${\sim}40\times$ lower T-count. However, ripple-carry has ${\sim}18\times$ higher T-depth due to sequential Toffoli chains, while QFT keeps T-depth lower thanks to parallel rotations.}
+  \label{fig:scaling-vecdot}
+\end{figure*}
+
+\begin{figure*}[t]
+   \centering
+   \input{figures/scaling-matmul-graphs}
+   \caption{Scaling behavior of matrix multiplication ($C = A \times B$ for $N \times N$ matrices) with 8-bit integers. Due to $O(N^3)$ complexity, only small matrices are tractable. Ripple-carry achieves ${\sim}40\times$ lower T-count but exhibits significantly higher T-depth (${\sim}68\times$ at $N{=}8$), reflecting the sequential nature of Toffoli-based arithmetic.}
+  \label{fig:scaling-matmul}
+\end{figure*}
+
+
+\begin{figure*}[t]
+    \centering
+    \input{latex/figures/4_results/sparsity-graphs}
+    \caption{Impact of matrix sparsity on circuit metrics for $16 \times 16$ matrix multiplication (8-bit integers). All metrics decrease monotonically as sparsity increases. The QFT backend uses fewer qubits but incurs ${\sim}22\times$ higher T-count due to Solovay-Kitaev approximation of arbitrary phase rotations (150 T-gates each). The ripple-carry backend requires more ancilla qubits but achieves lower T-count through exact Toffoli decomposition (7 T-gates per CCX).}
+\label{fig:sparsity}
+\end{figure*}
+
+
+\textcolor{red}{sez 4 da rivedere: aggiungere commento sui tradeoff delle implementazioni}
 Figures~\ref{fig:scaling-vecadd}, \ref{fig:scaling-vecdot}, and~\ref{fig:scaling-matmul} present the compilation results for all benchmarks, comparing both arithmetic backends across varying problem sizes. All circuits are decomposed to the Clifford+T gate set, the standard basis for fault-tolerant quantum computing. Arbitrary rotations are approximated using Solovay-Kitaev synthesis with $\sim$150 T-gates per rotation (precision $\epsilon = 10^{-15}$)~\cite{ross2014optimal}. All programs were successfully compiled, demonstrating that the pattern recognition and lowering phases correctly handle the three supported patterns: vector addition, dot product, and matrix multiplication.
 
-\input{figures/scaling-vecadd-graphs}
 
-\input{figures/scaling-vecdot-graphs}
+\textbf{Benefits of pattern-based recognition.} The comparison between vector addition at $N=2$ and $N=4$ highlights a key advantage of our pattern-based approach. While qubit count scales linearly with vector size (doubling from 64 to 128 qubits), the circuit depth remains constant at 95. This is possible because our compiler recognizes vector addition as a single high-level operation, rather than treating it as a sequence of independent scalar additions.
 
-\input{figures/scaling-matmul-graphs}
+In a vector addition $c[i] = a[i] + b[i]$, each element computation is independent from the others: computing $c[0]$ does not require the result of $c[1]$, and vice versa. By capturing this semantic information at the pattern recognition stage, the compiler can generate $N$ parallel addition circuits that execute simultaneously, keeping the depth equal to that of a single addition.
+A naive approach based on loop unrolling would instead process each iteration sequentially, resulting in a depth that grows linearly with $N$. The pattern-based approach thus preserves the inherent parallelism of vector operations~\cite{hls-book}, which is essential for generating efficient quantum circuits. Figure~\ref{fig:circuit} shows the quantum circuit generated for the vector addition kernel \texttt{c[i] = a[i] + b[i]}. The compiler allocates separate quantum registers for input vectors (\texttt{a}, \texttt{b}) and output vector (\texttt{c}), preserving reversibility. Each element-wise addition uses the QFT-based arithmetic backend described in Section~\ref{sec:quantum-arithmetic}: the repeated QFT and inverse-QFT blocks visible in the circuit correspond to independent additions performed for each vector element.
 
-\textbf{Benefits of pattern-based recognition.} The comparison between vector addition at $N=2$ and $N=4$ highlights a key advantage of our pattern-based approach. While qubit count and gate count scale linearly with vector size (doubling from 36 to 68 qubits and from 357 to 710 gates), the circuit depth remains constant at 84. This is possible because our compiler recognizes vector addition as a single high-level operation, rather than treating it as a sequence of independent scalar additions.
-
-In a vector addition $c[i] = a[i] + b[i]$, each element computation is independent from the others: computing $c[0]$ does not require the result of $c[1]$, and vice versa. By capturing this semantic information at the pattern recognition stage, the compiler can generate $N$ parallel addition circuits that execute simultaneously, keeping the depth equal to that of a single addition. A naive approach based on loop unrolling would instead process each iteration sequentially, resulting in a depth that grows linearly with $N$. The pattern-based approach thus preserves the inherent parallelism of vector operations~\cite{hls-book}, which is essential for generating efficient quantum circuits. Figure~\ref{fig:circuit} shows the quantum circuit generated for the vector addition kernel \texttt{c[i] = a[i] + b[i]}. The compiler allocates separate quantum registers for input vectors (\texttt{a}, \texttt{b}) and output vector (\texttt{c}), preserving reversibility. Each element-wise addition uses the QFT-based arithmetic backend described in Section~\ref{sec:quantum-arithmetic}: the repeated QFT and inverse-QFT blocks visible in the circuit correspond to independent additions performed for each vector element.
-
-\textbf{Cost of multiplication-based operations.} The dot product and matrix multiplication benchmarks show significantly higher circuit depth: 650 for dot product versus 84 for vector addition of the same size. This difference has a simple explanation: these operations require accumulation into a shared result.
+\textbf{Cost of multiplication-based operations.} The dot product and matrix multiplication benchmarks show significantly higher circuit depth: 4,345 for dot product versus 95 for vector addition at $N=2$. This difference has a simple explanation: these operations require accumulation into a shared result.
 
 In vector addition, each output element $c[i]$ is computed independently. In contrast, the dot product $s = \sum_{i} a[i] \cdot b[i]$ accumulates all partial products into a single scalar $s$. Each accumulation step must wait for the previous one to complete before updating $s$, creating a sequential chain that cannot be parallelized. Matrix multiplication exhibits the same pattern: each output element $C[i][j]$ requires $K$ sequential multiply-accumulate operations. Additionally, multiplication itself is more expensive than addition in quantum arithmetic, further increasing both depth and gate count.
+\textcolor{red}{gli elementi della stessa riga o colonna si moltiplicano in parallelo (e le righe e colonne si possono parallelizzare tra di loro al piu di un accesso sequenziale per la stessa riga}
 
-\begin{figure}[h]
-  \centering
-  \includegraphics[width=\linewidth]{figures/circuit_vecadd.pdf}
-  \caption{Quantum circuit generated for a vector addition with $N=2$ and 2-bit integers. The circuit illustrates the structure of element-wise additions, with quantum registers allocated for input vectors and output results.}
-  \label{fig:circuit}
-\end{figure}
 
 \textbf{Hybrid compilation.} The hybrid benchmark validates the merge phase of our extended pipeline. This benchmark contains both scalar arithmetic (compiled through the standard QuantumC path) and a vector addition (compiled through our extended path). The two paths are compiled independently and then merged into a unified quantum circuit.
 
 The resulting circuit (48 qubits, depth 132) is larger than the pure vector addition (36 qubits, depth 84), with the additional qubits allocated for scalar variables and intermediate results. The increased depth reflects the additional computation required by the hybrid return statement \texttt{return z + c[0]}, which combines a scalar value with a vector element. The \emph{result map} plays a crucial role in this process: the compiler uses it to locate the quantum register holding \texttt{c[0]} and emits a final addition operation to combine it with the scalar \texttt{z}, ensuring correctness even though scalar and vector computations were handled by separate compilation paths.
 
-\subsection{Arithmetic Backend Comparison}
-\label{sec:backend-comparison}
 
 The scaling figures enable direct comparison between the two arithmetic backends using the T-count metric, which is the standard cost measure for fault-tolerant quantum computing where T-gates dominate the resource overhead.
 
-\textbf{T-count comparison.} The most striking result is the dramatic T-count advantage of the ripple-carry backend. For vector addition (Figure~\ref{fig:scaling-vecadd}c), ripple-carry achieves up to 386$\times$ lower T-count compared to QFT (12,544 vs 4,849,152 at $N=128$). This difference arises because ripple-carry uses only Toffoli gates (each decomposing to exactly 7 T-gates), while QFT relies on arbitrary-angle phase rotations requiring Solovay-Kitaev approximation ($\sim$150 T-gates each).
+\textbf{T-count comparison.} The most striking result is the dramatic T-count advantage of the ripple-carry backend. For vector addition (Figure~\ref{fig:scaling-vecadd}c), ripple-carry achieves up to 338$\times$ lower T-count compared to QFT (14,336 vs 4,849,152 at $N=128$). This difference arises because ripple-carry uses only Toffoli gates (each decomposing to exactly 7 T-gates), while QFT relies on arbitrary-angle phase rotations requiring Solovay-Kitaev approximation ($\sim$150 T-gates each).
 
-For dot product (Figure~\ref{fig:scaling-vecdot}c) and matrix multiplication (Figure~\ref{fig:scaling-matmul}c), ripple-carry maintains a consistent 32$\times$ T-count advantage across all problem sizes.
+For dot product (Figure~\ref{fig:scaling-vecdot}c) and matrix multiplication (Figure~\ref{fig:scaling-matmul}c), ripple-carry maintains a consistent ${\sim}22\times$ T-count advantage across all problem sizes.
 
 \textbf{Qubit and depth trade-offs.} The QFT backend requires fewer qubits (Figures~\ref{fig:scaling-vecadd}a, \ref{fig:scaling-vecdot}a, \ref{fig:scaling-matmul}a) because it operates in-place using the Fourier basis, while ripple-carry requires ancilla qubits for carry propagation. For vector addition, QFT also achieves constant depth regardless of $N$ (Figure~\ref{fig:scaling-vecadd}b), exploiting the parallelism of phase rotations.
 
 \textbf{Backend selection criteria.} The choice between backends depends on the target architecture. For near-term NISQ devices where qubit count and depth are limiting factors, QFT may be preferable. For fault-tolerant quantum computers where T-gate cost dominates, ripple-carry is clearly superior despite its higher qubit overhead.
 
-\subsection{Sparsity Optimization}
-\label{sec:sparsity}
+\noindent\textbf{Sparsity analysis.}
+Many real-world linear algebra workloads involve sparse matrices~\cite{sparse-ml}, where a significant fraction of elements are zero. Our compiler exploits this property through a compile-time sparsity optimization: when lowering matrix multiplication from VecMat IR to quantum operations, the compiler checks the constant array values and skips the generation of multiply-accumulate operations for which either operand is zero. Since $0 \times x = 0$ and $\mathit{acc} + 0 = \mathit{acc}$, these operations have no effect on the result and can be safely eliminated.
 
-\input{figures/sparsity-graphs}
+Figure~\ref{fig:sparsity} shows the impact of this optimization on $16 \times 16$ matrix multiplication with 8-bit integers. We vary the sparsity level from 0\% (dense matrices) to 90\% (230 out of 256 elements are zero) and measure the resulting circuit metrics for both arithmetic backends.
 
-Many real-world linear algebra workloads involve sparse matrices, where a significant fraction of elements are zero. Our compiler exploits this property through a compile-time sparsity optimization: when lowering matrix multiplication from VecMat IR to quantum operations, the compiler checks the constant array values and skips the generation of multiply-accumulate operations for which either operand is zero. Since $0 \times x = 0$ and $\mathit{acc} + 0 = \mathit{acc}$, these operations have no effect on the result and can be safely eliminated.
+The results demonstrate substantial reductions across all metrics. At 90\% sparsity, qubit count decreases by 91\% for QFT (from 71,680 to 6,752) and 97\% for ripple-carry (from 370,688 to 9,526). Circuit depth is reduced by 77\% for QFT (from 69,096 to 15,786) and 72\% for ripple-carry (from 126,140 to 35,558). Most significantly, T-count---the dominant cost metric for fault-tolerant quantum computing---is reduced by 99\% for both backends: from 591M to 5.5M for QFT, and from 26M to 243K for ripple-carry.
 
-Figure~\ref{fig:sparsity} shows the impact of this optimization on $4 \times 4$ matrix multiplication with 8-bit integers. We vary the sparsity level from 0\% (dense matrices) to 75\% (12 out of 16 elements are zero) and measure the resulting circuit metrics for both arithmetic backends.
+Throughout all sparsity levels, the ripple-carry backend maintains a consistent ${\sim}22\times$ T-count advantage over QFT. This ratio remains constant because both backends benefit equally from the sparsity optimization, which operates at the VecMat IR level before the arithmetic backend is selected.
 
-The results demonstrate substantial reductions across all metrics. At 75\% sparsity, qubit count decreases by 68\% (from 1,408 to 448 for QFT), gate count by 94\% (from 37,686 to 2,366), and circuit depth by 72\% (from 1,973 to 552). The optimization is equally effective for both backends, as it operates at the VecMat IR level before the arithmetic backend is selected.
-
-This optimization is particularly valuable for quantum machine learning applications, where weight matrices are often pruned to reduce computational cost. By performing sparsity analysis at compile time, the optimization incurs no runtime overhead and produces circuits that are proportionally smaller to the actual non-zero computation required.
+This optimization is particularly valuable for quantum machine learning applications, where weight matrices are often pruned to 90\% sparsity or higher~\cite{pruning}. By performing sparsity analysis at compile time, the optimization incurs no runtime overhead and produces circuits proportionally smaller to the actual non-zero computation required.
 

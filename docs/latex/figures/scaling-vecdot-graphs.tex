@@ -1,81 +1,76 @@
 % Dot Product scaling graphs - three side by side
 % Usage: \input{figures/scaling-vecdot-graphs}
 
-\begin{figure*}[t]
-  \centering
-  \begin{tikzpicture}
-    \begin{groupplot}[
-      group style={
-        group size=3 by 1,
-        horizontal sep=1.2cm,
-      },
-      width=0.36\textwidth,
-      height=5cm,
-      xlabel={$N$},
-      xmode=log,
-      log basis x={2},
-      xmin=1.5, xmax=96,
-      xtick={2,4,8,16,32,64},
-      xticklabels={2,4,8,16,32,64},
-      legend style={
-        at={(0.5,1.02)},
-        anchor=south,
-        legend columns=2,
-        font=\footnotesize,
-      },
-      grid=major,
-      grid style={gray!30},
-      tick label style={font=\footnotesize},
-      label style={font=\small},
-    ]
+\begin{tikzpicture}
+  \begin{groupplot}[
+    group style={
+      group size=3 by 1,
+      horizontal sep=1.2cm,
+    },
+    width=0.36\textwidth,
+    height=5cm,
+    xlabel={$N$},
+    xmode=log,
+    log basis x={2},
+    xmin=1.5, xmax=96,
+    xtick={2,4,8,16,32,64},
+    xticklabels={2,4,8,16,32,64},
+    legend style={
+      at={(0.5,1.02)},
+      anchor=south,
+      legend columns=2,
+      font=\footnotesize,
+    },
+    grid=major,
+    grid style={gray!30},
+    tick label style={font=\footnotesize},
+    label style={font=\small},
+  ]
 
-    % Graph 1: Qubits (linear scale to show differences clearly)
-    \nextgroupplot[
-      ylabel={Qubits},
-      ymin=0, ymax=7500,
-      title={\textbf{(a) Qubit Count}},
-      title style={font=\small},
-    ]
-    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-      (2, 80) (4, 144) (8, 272) (16, 528) (32, 1040) (64, 2064)
-    };
-    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-      (2, 226) (4, 436) (8, 856) (16, 1696) (32, 3376) (64, 6736)
-    };
-    \legend{QFT, Ripple}
+  % Graph 1: Qubits
+  \nextgroupplot[
+    ylabel={Qubits},
+    ymin=0, ymax=7500,
+    title={\textbf{(a) Qubit Count}},
+    title style={font=\small},
+  ]
+  \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+    (2, 80) (4, 144) (8, 272) (16, 528) (32, 1040) (64, 2064)
+  };
+  \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+    (2, 226) (4, 436) (8, 856) (16, 1696) (32, 3376) (64, 6736)
+  };
+  \legend{QFT, Ripple}
 
-    % Graph 2: Depth
-    \nextgroupplot[
-      ylabel={Depth},
-      ymode=log,
-      ymin=2500, ymax=700000,
-      title={\textbf{(b) Circuit Depth}},
-      title style={font=\small},
-    ]
-    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-      (2, 3478) (4, 3670) (8, 4054) (16, 4822) (32, 6358) (64, 9430)
-    };
-    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-      (2, 14681) (4, 29111) (8, 57971) (16, 115691) (32, 231131) (64, 462011)
-    };
+  % Graph 2: T-depth
+  \nextgroupplot[
+    ylabel={T-depth},
+    ymode=log,
+    ymin=800, ymax=300000,
+    title={\textbf{(b) T-depth}},
+    title style={font=\small},
+  ]
+  \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+    (2, 1220) (4, 1594) (8, 2342) (16, 3838) (32, 6830) (64, 12814)
+  };
+  \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+    (2, 7364) (4, 14674) (8, 29294) (16, 58534) (32, 117014) (64, 233974)
+  };
 
-    % Graph 3: T-count
-    \nextgroupplot[
-      ylabel={T-count},
-      ymode=log,
-      ymin=5000, ymax=20000000,
-      title={\textbf{(c) T-count}},
-      title style={font=\small},
-    ]
-    \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
-      (2, 288754) (4, 577508) (8, 1155016) (16, 2310032) (32, 4620064) (64, 9240128)
-    };
-    \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
-      (2, 8910) (4, 17810) (8, 35610) (16, 71210) (32, 142410) (64, 284810)
-    };
+  % Graph 3: T-count
+  \nextgroupplot[
+    ylabel={T-count},
+    ymode=log,
+    ymin=5000, ymax=20000000,
+    title={\textbf{(c) T-count}},
+    title style={font=\small},
+  ]
+  \addplot[blue, thick, mark=square*, mark size=2pt] coordinates {
+    (2, 323916) (4, 651130) (8, 1305558) (16, 2614414) (32, 5232126) (64, 10467550)
+  };
+  \addplot[red, thick, mark=triangle*, mark size=2pt] coordinates {
+    (2, 8114) (4, 16218) (8, 32426) (16, 64842) (32, 129674) (64, 259338)
+  };
 
-    \end{groupplot}
-  \end{tikzpicture}
-  \caption{Scaling behavior of dot product ($s = \sum_i a[i] \cdot b[i]$) with 8-bit integers. The ripple-carry backend requires more qubits due to ancilla allocation but achieves 32$\times$ lower T-count. QFT has lower depth due to parallel phase rotations, while ripple-carry depth grows linearly with sequential carry propagation.}
-  \label{fig:scaling-vecdot}
-\end{figure*}
+  \end{groupplot}
+\end{tikzpicture}
