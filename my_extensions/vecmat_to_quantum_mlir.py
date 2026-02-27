@@ -1,25 +1,12 @@
 # my_extensions/vecmat_to_quantum_mlir.py
 
 """
-Lowering diretto da VecMatModule al quantum MLIR di QuantumC.
+Lowering da VecMatModule a quantum MLIR (dialetto QuantumC).
 
-In questa versione:
-- inizializza vettori e matrici con valori REALI se disponibili in:
-    vecmat_module.const_arrays  +  vecmat_module.const_shapes
-- supporta anche inizializzazione "fallback" a 0 se non ci sono costanti
-- implementa lowering di:
-    * VecAddOp  (vec add)
-    * VecDotOp  (vec dot)
-    * MatMulOp  (matmul)
-
-AGGIUNTA STRUTTURALE:
-- costruisce una mappa semantica result_map che collega:
-    ("C", i, j) -> SSAValue corrispondente a C[i][j]
-  e per i vettori:
-    ("c", i) -> SSAValue corrispondente a c[i]
-  e per gli scalari (dot):
-    ("acc",) -> SSAValue finale
-Questa mappa serve per rendere il "return" generale e corretto nel merge.
+Questo modulo:
+- inizializza vettori/matrici usando le costanti in `const_arrays/const_shapes` se presenti
+  (altrimenti inizializza a 0)
+- effettua il lowering di VecAddOp, VecDotOp e MatMulOp
 """
 
 from __future__ import annotations
@@ -43,9 +30,7 @@ from step4_mlir_to_quantum_mlir.quantum_dialect import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Analisi del VecMatModule: raccolta info su vettori, matrici e scalari
-# ---------------------------------------------------------------------------
+######### Analisi del VecMatModule: raccolta info su vettori, matrici e scalari ##########
 
 def _collect_symbols(
     vecmat_module: VecMatModule,
@@ -67,6 +52,11 @@ def _collect_symbols(
         return t
 
     def _update(name: str, shape: tuple[int, ...], elem_bits: int):
+        """
+        Inserisce/aggiorna le info di un simbolo.
+        Se il simbolo compare con shape diverse ma stesso rank, teniamo quella più grande.
+        Se il rank è diverso, ignoriamo (caso ambiguo che non è gestito qui).
+        """
         old = tensor_info.get(name)
         if old is None:
             tensor_info[name] = (shape, elem_bits)
@@ -74,7 +64,7 @@ def _collect_symbols(
 
         old_shape, _old_bits = old
 
-        # Se la "dimensione" (rank) è diversa, non risolvibile qui:
+        # Se la "dimensione" (rank) è diversa, non risolviamo qui
         if len(shape) != len(old_shape):
             return
 
@@ -103,24 +93,22 @@ def _collect_symbols(
     return tensor_info, scalar_names
 
 
-# ---------------------------------------------------------------------------
-# Entry point: VecMatModule -> ModuleOp (quantum dialect)
-# ---------------------------------------------------------------------------
+#### Entry point: VecMatModule -> ModuleOp (quantum dialect) ####
 
 def from_vecmat_to_quantum_mlir(vecmat_module: VecMatModule, num_bits: int = 16) -> ModuleOp:
     """
-    VecMatModule -> ModuleOp (quantum dialect)
+    Traduce un VecMatModule in un ModuleOp (dialetto quantum).
 
-    Inizializza registri anche quando non ci sono macro-op:
-    usa const_shapes/const_arrays per costruire tensor_info.
-
-    NOTA: viene aggiunto module.result_map come side-table del compilatore.
+    - deduce shape dei tensori dalle ops (e dalle costanti se presenti)
+    - inizializza tensori/scalari
+    - emette le macro-op (vec_add / vec_dot / matmul)
     """
     tensor_info, scalar_names = _collect_symbols(vecmat_module)
 
     const_arrays = getattr(vecmat_module, "const_arrays", {}) or {}
     const_shapes = getattr(vecmat_module, "const_shapes", {}) or {}
 
+    # Completa tensor_info usando le costanti dichiarate nel C anche se non compaiono in ops.
     for name in set(const_arrays.keys()) | set(const_shapes.keys()):
         if name in tensor_info:
             continue
@@ -131,13 +119,18 @@ def from_vecmat_to_quantum_mlir(vecmat_module: VecMatModule, num_bits: int = 16)
 
     module = ModuleOp([])
 
-    # Side-table per collegare elementi (vec/mat) ai rispettivi SSAValue finali.
-    # Chiave:
+    # Side-table: collega (nome, indici) allo SSAValue "corrente/finale" generato dal lowering.
+    # Serve per recuperare risultati in modo stabile (return/merge), senza dipendere
+    # dall'ultimo valore visto durante l'emissione.
+    #
+    # Chiavi:
     #   - vettore: (name, i)
     #   - matrice: (name, i, j)
     #   - scalare: (name,)
+
     module.result_map: Dict[Tuple[Any, ...], SSAValue] = {}
 
+    # Crea la funzione main vuota e aggiunge il blocco di ingresso.
     entry_block = Block()
     func_region = Region([entry_block])
     func_type = ([], [])
@@ -161,9 +154,7 @@ def from_vecmat_to_quantum_mlir(vecmat_module: VecMatModule, num_bits: int = 16)
     return module
 
 
-# ---------------------------------------------------------------------------
-# PROLOGO: inizializzazione registri per tensori (vettori/matrici) e scalari
-# ---------------------------------------------------------------------------
+###### PROLOGO: inizializzazione registri per tensori (vettori/matrici) e scalari ######
 
 def _emit_tensor_and_scalar_inits(
     block: Block,
@@ -173,6 +164,14 @@ def _emit_tensor_and_scalar_inits(
     scalar_env: dict[str, SSAValue],
     vecmat_module: VecMatModule,
 ):
+    """
+    Alloca e inizializza i registri quantum per tutti i simboli usati.
+
+    - tensori: creati come lista piatta di SSAValue (row-major per matrici)
+    - scalari: inizializzati a 0
+    - se ci sono costanti in vecmat_module.const_arrays/const_shapes, vengono usate;
+      altrimenti fallback a 0 e/o shape inferita
+    """
     const_arrays = getattr(vecmat_module, "const_arrays", {}) or {}
     const_shapes = getattr(vecmat_module, "const_shapes", {}) or {}
 
@@ -208,9 +207,7 @@ def _emit_tensor_and_scalar_inits(
         scalar_env[name] = init_op.results[0]
 
 
-# ---------------------------------------------------------------------------
-# Lowering delle op VecMat in operazioni quantum.*
-# ---------------------------------------------------------------------------
+###### Lowering delle op VecMat in operazioni quantum.* ########
 
 def _emit_vecmat_ops(
     block: Block,
@@ -220,6 +217,7 @@ def _emit_vecmat_ops(
     result_map: Dict[Tuple[Any, ...], SSAValue],
     const_arrays: dict[str, list[int]],
 ):
+    """Emette il lowering delle ops VecMat in operazioni quantum.* sul block."""
     for fn in vecmat_module.functions:
         for op in fn.ops:
             if isinstance(op, VecAddOp):
@@ -238,6 +236,7 @@ def _lower_vec_add(
     tensor_env: dict[str, list[SSAValue]],
     result_map: Dict[Tuple[Any, ...], SSAValue],
 ):
+    """Lowering di c[i] = a[i] + b[i] per i in [0, L)."""
     dest_regs = tensor_env[op.dest]
     lhs_regs = tensor_env[op.lhs]
     rhs_regs = tensor_env[op.rhs]
@@ -247,7 +246,7 @@ def _lower_vec_add(
         block.add_op(add_op)
         dest_regs[i] = add_op.results[0]
 
-        # registra c[i] -> SSAValue
+        # Aggiorna il registro destinazione con il nuovo SSAValue (stile SSA).
         result_map[(op.dest, i)] = dest_regs[i]
 
 
@@ -259,12 +258,16 @@ def _lower_vec_dot(
     result_map: Dict[Tuple[Any, ...], SSAValue],
     const_arrays: dict[str, list[int]],
 ):
+    """
+    Lowering di acc = sum_i (a[i] * b[i]).
+    Se sono disponibili i valori costanti di a e b, salta i prodotti con operandi zero.
+    """
     a_regs = tensor_env[op.lhs]
     b_regs = tensor_env[op.rhs]
     acc = scalar_env[op.dest]
 
     for i in range(op.length):
-        # Sparsity optimization: skip if either operand is zero
+       
         a_vals = const_arrays.get(op.lhs)
         b_vals = const_arrays.get(op.rhs)
         if a_vals is not None and b_vals is not None:
@@ -278,8 +281,9 @@ def _lower_vec_dot(
         block.add_op(add_op)
         acc = add_op.results[0]
 
+    # Salva il valore finale dell'accumulatore.
     scalar_env[op.dest] = acc
-    result_map[(op.dest,)] = acc  # scalare finale
+    result_map[(op.dest,)] = acc  
 
 
 def _lower_matmul(
@@ -290,12 +294,11 @@ def _lower_matmul(
     const_arrays: dict[str, list[int]],
 ):
     """
-    C = A * B
-    A: (m,k) row-major flatten
-    B: (k,n) row-major flatten
-    C: (m,n) row-major flatten
+    Lowering di C = A * B con tensori flatten in row-major.
 
-    C[i,j] = sum_{kk=0..k-1} A[i,kk] * B[kk,j]
+    Indici:
+      A: (m, k), B: (k, n), C: (m, n)
+      C[i,j] = sum_{kk} A[i,kk] * B[kk,j]
     """
     A = tensor_env[op.lhs]
     B = tensor_env[op.rhs]
@@ -310,7 +313,6 @@ def _lower_matmul(
         for j in range(n):
             acc = C[idx(i, j, n)]
             for kk in range(k):
-                # Sparsity optimization: skip if either operand is zero
                 a_vals = const_arrays.get(op.lhs)
                 b_vals = const_arrays.get(op.rhs)
                 if a_vals is not None and b_vals is not None:
@@ -329,7 +331,6 @@ def _lower_matmul(
                 block.add_op(add_op)
                 acc = add_op.results[0]
 
+            # Aggiorna C[i,j] col nuovo SSAValue e registra il risultato.
             C[idx(i, j, n)] = acc
-
-            # registra C[i][j] -> SSAValue (semantica preservata)
             result_map[(op.dest, i, j)] = acc

@@ -26,16 +26,13 @@ from my_extensions.vecmat_ir import (
 )
 
 
-# =========================
-# Normalizzazione stmt list
-# =========================
+# Normalizzazione delle liste di statement
+
 
 def _flatten_stmts(stmts: Iterable[Any]) -> List[Any]:
     """
-    Alcuni AST possono contenere liste annidate dentro CompoundStmt.stmts, es:
-        stmts=[[VarDecl(...)], ForStmt(...), AssignStmt(...)]
-    Questa funzione appiattisce ricorsivamente a:
-        [VarDecl(...), ForStmt(...), AssignStmt(...)]
+    Appiattisce ricorsivamente una sequenza di statement che può contenere
+    liste annidate (es. CompoundStmt.stmts), restituendo una lista piatta.
     """
     out: List[Any] = []
     for s in stmts:
@@ -47,7 +44,10 @@ def _flatten_stmts(stmts: Iterable[Any]) -> List[Any]:
 
 
 def _compound_stmts(body: CompoundStmt) -> List[Any]:
-    """Ritorna la lista stmt normalizzata (flatten) di un CompoundStmt."""
+    """Estrae e normalizza (flatten) la lista degli statement di un CompoundStmt.
+
+    Se l'attributo `stmts` non è presente, restituisce una lista vuota.
+    """
     return _flatten_stmts(getattr(body, "stmts", []))
 
 
@@ -95,9 +95,7 @@ def _is_simple_for_header(for_stmt: ForStmt) -> tuple[bool, Optional[str], Optio
     return True, idx_name, bound
 
 
-# =========================
-# vec_add
-# =========================
+########## vec_add #############
 
 def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     """
@@ -191,9 +189,9 @@ def _match_vec_add_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecAddOp]:
     )
 
 
-# =========================
-# vec_dot
-# =========================
+
+############# vec_dot #################
+
 
 def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     """
@@ -289,33 +287,32 @@ def _match_vec_dot_for(for_stmt: ForStmt, elem_bits: int) -> Optional[VecDotOp]:
     )
 
 
-# =========================
-# matmul (triplo loop)
-# =========================
+
+########### matmul (triplo loop) #############
+
 
 def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     """
-    Riconosce (forma “matmul classica” con accumulatore locale s):
-        for (int i = 0; i < M; i++) {
-            for (int j = 0; j < N; j++) {
-                int s = 0;
-                for (int k = 0; k < K; k++) {
-                    s = s + A[i][k] * B[k][j];
-                }
-                C[i][j] = s;
-            }
-        }
+    Riconosce un matmul in forma di triplo loop annidato (i, j, k) con accumulatore
+    scalare locale e store finale su C[i][j].
 
-    Nota: la versione precedente assumeva body_j.stmts esattamente di lunghezza 2:
-        zero_stmt (Assign c[i][j]=0) + for_k
-    Ma l’AST osservato nel test contiene:
-        [VarDecl s=0, for_k(... update su s ...), Assign C[i][j]=s]
-    e, in più, può contenere liste annidate (stmts=[[VarDecl(...)], ...]).
+    Pattern atteso (a livello semantico):
+      - for i in [0, M)
+        - for j in [0, N)
+          - int s = 0
+          - for k in [0, K): s = s + A[i][k] * B[k][j]
+          - C[i][j] = s
+
+    Restituisce un MatMulOp con nomi (dest/lhs/rhs) e dimensioni (m, n, k) se il
+    pattern è riconosciuto, altrimenti None.
     """
+
+    # Header loop esterno
     ok_i, i_name, m = _is_simple_for_header(for_i)
     if not ok_i or i_name is None or m is None:
         return None
 
+    # Corpo di i: ci aspettiamo un solo statement, il loop su j
     body_i = for_i.body
     if not isinstance(body_i, CompoundStmt):
         return None
@@ -323,7 +320,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if len(stmts_i) != 1 or not isinstance(stmts_i[0], ForStmt):
         return None
     for_j = stmts_i[0]
-
+    # Header del loop su j
     ok_j, j_name, n = _is_simple_for_header(for_j)
     if not ok_j or j_name is None or n is None:
         return None
@@ -333,7 +330,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         return None
     stmts_j = _compound_stmts(body_j)
 
-    # Ci aspettiamo: VarDecl(s=0), ForStmt(k-loop), Assign(C[i][j]=s)
+    # Corpo di j: VarDecl(s=0), ForStmt(k-loop), Assign(C[i][j]=s)
     if len(stmts_j) != 3:
         return None
     s_decl, for_k, store_c = stmts_j
@@ -356,6 +353,8 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
         return None
     if not isinstance(lhs_store.array, ArrayAccess):
         return None
+
+    # Estrae: dest_name = C, e verifica indici [i][j]
     c_outer = lhs_store.array
     if not isinstance(c_outer.array, DeclRef):
         return None
@@ -367,7 +366,7 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(store_c.value, DeclRef) or store_c.value.name != s_name:
         return None
 
-    # k-loop header
+    # Header del loop su k
     ok_k, k_name, k_dim = _is_simple_for_header(for_k)
     if not ok_k or k_name is None or k_dim is None:
         return None
@@ -376,6 +375,8 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     if not isinstance(body_k, CompoundStmt):
         return None
     stmts_k = _compound_stmts(body_k)
+
+    # Corpo di k: un solo update dell'accumulatore
     if len(stmts_k) != 1:
         return None
     update_stmt = stmts_k[0]
@@ -437,9 +438,9 @@ def _match_matmul_for(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     )
 
 
-# =========================
-# matmul (triplo loop) - forma con accumulo diretto
-# =========================
+
+#### matmul (triplo loop) - forma con accumulo diretto ####
+
 
 def _match_matmul_for_direct(for_i: ForStmt, elem_bits: int) -> Optional[MatMulOp]:
     """
@@ -453,7 +454,7 @@ def _match_matmul_for_direct(for_i: ForStmt, elem_bits: int) -> Optional[MatMulO
             }
         }
     """
-    # Verifica header loop i
+    # Verifica header loop esterno i
     ok_i, i_name, m = _is_simple_for_header(for_i)
     if not ok_i or i_name is None or m is None:
         return None
@@ -473,8 +474,9 @@ def _match_matmul_for_direct(for_i: ForStmt, elem_bits: int) -> Optional[MatMulO
         return None
 
     # Body di j deve contenere esattamente 2 statement:
-    # 1. AssignStmt: C[i][j] = 0
-    # 2. ForStmt: k-loop
+    # AssignStmt: C[i][j] = 0 e 
+    # ForStmt: k-loop
+
     body_j = for_j.body
     if not isinstance(body_j, CompoundStmt):
         return None
@@ -609,9 +611,9 @@ def _match_matmul_for_direct(for_i: ForStmt, elem_bits: int) -> Optional[MatMulO
     )
 
 
-# =========================
-# Helper
-# =========================
+
+########### Helper #############
+
 
 def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[int, ...]]:
     """
@@ -627,6 +629,7 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
     if not elems:
         return [], (0,)
 
+    # Caso matrice: {{...}, {...}, ...}
     if isinstance(elems[0], InitList):
         rows = len(elems)
         row_lengths: List[int] = []
@@ -649,6 +652,7 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
         cols = row_lengths[0]
         return flat, (rows, cols)
 
+    # Caso vettore: {1, 2, 3}
     flat: List[int] = []
     for e in elems:
         if not isinstance(e, IntegerLiteral):
@@ -658,9 +662,8 @@ def _extract_initlist_flat_and_shape(init: InitList) -> Tuple[List[int], Tuple[i
     return flat, (len(flat),)
 
 
-# =========================
-# Conversione generale
-# =========================
+
+########### Conversione AST -> VecMat ##############
 
 def from_c_ast_to_vecmat(tu: TranslationUnit, elem_bits: int) -> VecMatModule:
     """

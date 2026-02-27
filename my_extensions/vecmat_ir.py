@@ -3,10 +3,7 @@
 from dataclasses import dataclass, field
 from typing import List, Union, Tuple, Dict
 
-
-# =========================
 # Tipi del dialetto
-# =========================
 
 @dataclass
 class ScalarType:
@@ -32,9 +29,7 @@ class MatrixType:
 VecMatType = Union[ScalarType, VectorType, MatrixType]
 
 
-# =========================
 # Base per le operazioni
-# =========================
 
 @dataclass
 class VecMatOp:
@@ -42,9 +37,7 @@ class VecMatOp:
     pass
 
 
-# =========================
 # Operazioni scalari di supporto
-# =========================
 
 @dataclass
 class ScalarAddOp(VecMatOp):
@@ -64,9 +57,7 @@ class ScalarMulOp(VecMatOp):
     ty: ScalarType
 
 
-# =========================
 # Macro-operazioni vettoriali/matriciali
-# =========================
 
 @dataclass
 class VecAddOp(VecMatOp):
@@ -108,9 +99,7 @@ class MatMulOp(VecMatOp):
     elem_bits: int
 
 
-# =========================
 # Funzioni e modulo
-# =========================
 
 @dataclass
 class VecMatFunction:
