@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Benchmark script for sparsity optimization on 16x16 matrices.
-Measures Clifford+T metrics: qubits, depth, t_count.
+Measures Clifford+T metrics: qubits, depth, t_count, t_depth.
+
+Uses subprocess approach (like generate_scaling_data.py): each benchmark
+runs pipeline.py as a separate process, ensuring metrics are computed
+via the unified Clifford+T flow (_compute_metrics_and_score).
 
 Sparsity levels chosen for ML relevance:
 - 0%: Dense baseline
@@ -9,44 +13,16 @@ Sparsity levels chosen for ML relevance:
 - 50%: Moderate sparsity
 - 75%: Sparse
 - 90%: Typical ML pruning
-
-T-count methodology:
-- QFT backend: Uses transpile + Solovay-Kitaev estimation (150T per arbitrary rotation)
-- Ripple backend: Uses theoretical T-count from gate composition (CCX=7T, MCX deterministic)
-  This avoids Qiskit's inconsistent MCX decomposition which depends on circuit size.
 """
 
 import os
 import sys
 import csv
-import json
 import random
+import subprocess
 import tempfile
 import time
 from pathlib import Path
-from collections import Counter
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from pipeline import (
-    generate_json_ast,
-    parse_ast,
-    from_c_ast_to_vecmat,
-    from_vecmat_to_quantum_mlir,
-)
-from qiskit import transpile
-from step5_quantum_mlir_to_qasm.qasm_generator import (
-    generate_circuit,
-    compute_t_count,
-)
-from step5_quantum_mlir_to_qasm.q_arithmetics import set_number_of_bits, set_arithmetic_mode
-
-# Basis gates per transpile (solo per QFT)
-UNIFORM_BASIS = ["cx", "rz", "sx", "x", "measure"]
-
-# T-count per gate (standard Clifford+T decomposition)
-T_PER_CCX = 7  # Toffoli gate: 7 T-gates
 
 
 # =============================================================================
@@ -57,32 +33,9 @@ BITS = 8            # Bit width for integers
 BACKENDS = ['qft', 'ripple']
 
 # Sparsity levels (percentage of zeros)
-SPARSITY_LEVELS = [0.0, 0.25, 0.50, 0.75, 0.90]
+SPARSITY_LEVELS = [0.90, 0.75, 0.50, 0.25, 0.0]
 
-
-def calculate_ripple_t_count(circuit) -> int:
-    """
-    Calculate theoretical T-count for ripple-carry circuits.
-
-    Uses standard decomposition formulas:
-    - CCX (Toffoli): 7 T-gates
-    - MCX(n controls): V-chain decomposition = 2*(n-1) Toffoli = 14*(n-1) T
-
-    This is deterministic and doesn't depend on Qiskit's transpiler behavior.
-    Reference: Amy et al., "Polynomial-time T-depth optimization"
-    """
-    total_t = 0
-
-    for inst in circuit.data:
-        name = inst.operation.name
-        if name == 'ccx':
-            total_t += T_PER_CCX
-        elif name == 'mcx':
-            n_controls = len(inst.qubits) - 1
-            # V-chain decomposition: 2*(n-1) Toffoli gates
-            total_t += 2 * (n_controls - 1) * T_PER_CCX
-
-    return total_t
+OUTPUT_CSV = Path(__file__).parent / "sparsity_results_16x16.csv"
 
 
 def generate_sparse_matrix(size: int, num_zeros: int, seed: int = None) -> list[list[int]]:
@@ -131,72 +84,68 @@ def generate_matmul_c_code(A: list[list[int]], B: list[list[int]], size: int) ->
 '''
 
 
-def compile_and_measure(c_code: str, bits: int, backend: str) -> dict:
-    """
-    Compile C code and return circuit metrics.
-
-    T-count methodology differs by backend:
-    - QFT: transpile to basis gates + Solovay-Kitaev estimation (150T per arbitrary rotation)
-    - Ripple: theoretical T-count from gate composition (deterministic, no Qiskit dependency)
-    """
-    set_number_of_bits(bits)
-    set_arithmetic_mode(backend)
-
-    # Write to temp file
+def compile_and_get_metrics(c_code: str, bits: int, backend: str) -> dict | None:
+    """Compile C code via subprocess and extract metrics from pipeline.py output."""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
         f.write(c_code)
         c_path = f.name
 
-    json_path = None
     try:
-        # Compile through pipeline
-        json_path = generate_json_ast(c_path)
-        with open(json_path) as f:
-            ast_json = json.load(f)
-        tu = parse_ast(ast_json)
-        vecmat_module = from_c_ast_to_vecmat(tu, bits)
-        quantum_module = from_vecmat_to_quantum_mlir(vecmat_module, bits)
-        circuit = generate_circuit(quantum_module, num_bits=bits, arithmetic_mode=backend)
+        cmd = [sys.executable, "pipeline.py", c_path, "--bits", str(bits), "--adder", backend]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=18000)
+        output = result.stdout + result.stderr
 
-        # Qubits dal circuito originale
-        qubits = circuit.num_qubits
-
-        # Depth da decompose (deterministico, senza anomalie)
-        circuit_decomposed = circuit.decompose(reps=1)
-        depth = circuit_decomposed.depth()
-
-        # T-count: diverso per backend
-        if backend == 'ripple':
-            # Ripple-carry: T-count teorico deterministico
-            # Evita l'inconsistenza di Qiskit nella decomposizione MCX
-            t_count = calculate_ripple_t_count(circuit)
-        else:
-            # QFT: transpile + Solovay-Kitaev estimation
-            circuit_transpiled = transpile(circuit, basis_gates=UNIFORM_BASIS, optimization_level=1)
-            t_metrics = compute_t_count(circuit_transpiled)
-            t_count = t_metrics['t_count']
-
-        return {
-            'qubits': qubits,
-            'depth': depth,
-            't_count': t_count,
+        metrics = {
+            'qubits': 0,
+            'depth': 0,
+            't_count': 0,
+            't_depth': 0,
         }
+
+        for line in output.split('\n'):
+            if 'num_qubits' in line:
+                metrics['qubits'] = int(line.split(':')[1].strip())
+            elif line.strip().startswith('depth'):
+                metrics['depth'] = int(line.split(':')[1].strip())
+            elif 'T-count' in line and 'total' in line:
+                val = line.split(':')[1].split('(')[0].strip()
+                metrics['t_count'] = int(val)
+            elif 'T-depth' in line and 'layers' in line:
+                val = line.split(':')[1].split('(')[0].strip()
+                metrics['t_depth'] = int(val)
+
+        return metrics
+    except subprocess.TimeoutExpired:
+        print("TIMEOUT", end=" ", flush=True)
+        return None
+    except Exception as e:
+        print(f"ERROR({type(e).__name__})", end=" ", flush=True)
+        return None
     finally:
-        if os.path.exists(c_path):
-            os.unlink(c_path)
-        if json_path and os.path.exists(json_path):
-            os.unlink(json_path)
+        os.unlink(c_path)
+
+
+def save_results(results):
+    """Save partial or final results to CSV."""
+    with open(OUTPUT_CSV, 'w', newline='') as f:
+        fieldnames = ['sparsity', 'zeros', 'backend', 'qubits', 'depth', 't_count', 't_depth']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
 
 
 def run_benchmark():
     """Run the full sparsity benchmark for 16x16 matrices."""
+    os.chdir(Path(__file__).parent.parent)
+
     total_elements = SIZE * SIZE
     results = []
 
-    print(f"=" * 80)
+    print("=" * 80)
     print(f"SPARSITY BENCHMARK: {SIZE}x{SIZE} matrices ({total_elements} elements)")
     print(f"Bit width: {BITS}, Backends: {BACKENDS}")
-    print(f"=" * 80)
+    print(f"Subprocess approach (unified Clifford+T metrics via pipeline.py)")
+    print("=" * 80)
     print()
 
     total_tests = len(SPARSITY_LEVELS) * len(BACKENDS)
@@ -216,56 +165,46 @@ def run_benchmark():
             print(f"  [{current_test}/{total_tests}] Backend: {backend}...", end=" ", flush=True)
 
             start_time = time.time()
-            try:
-                metrics = compile_and_measure(c_code, BITS, backend)
-                elapsed = time.time() - start_time
+            metrics = compile_and_get_metrics(c_code, BITS, backend)
+            elapsed = time.time() - start_time
 
+            if metrics and metrics['qubits'] > 0:
                 results.append({
                     'sparsity': sparsity,
                     'zeros': num_zeros,
                     'backend': backend,
-                    'qubits': metrics['qubits'],
-                    'depth': metrics['depth'],
-                    't_count': metrics['t_count'],
+                    **metrics,
                 })
-
                 print(f"OK ({elapsed:.1f}s) - qubits={metrics['qubits']:,}, t_count={metrics['t_count']:,}", flush=True)
-
-            except Exception as e:
-                elapsed = time.time() - start_time
-                print(f"FAILED ({elapsed:.1f}s) - {type(e).__name__}: {e}")
+            else:
                 results.append({
                     'sparsity': sparsity,
                     'zeros': num_zeros,
                     'backend': backend,
-                    'qubits': -1,
-                    'depth': -1,
-                    't_count': -1,
+                    'qubits': 0,
+                    'depth': 0,
+                    't_count': 0,
+                    't_depth': 0,
                 })
+                print(f"FAIL ({elapsed:.1f}s)", flush=True)
 
         print()
+        save_results(results)
 
-    # Write CSV
-    output_path = Path(__file__).parent / 'sparsity_results_16x16.csv'
-    with open(output_path, 'w', newline='') as f:
-        fieldnames = ['sparsity', 'zeros', 'backend', 'qubits', 'depth', 't_count']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-
-    print(f"Results saved to {output_path}")
+    save_results(results)
+    print(f"\nResults saved to {OUTPUT_CSV}")
 
     # Print summary table
     print()
-    print("=" * 85)
-    print(f"{'Sparsity':<10} {'Zeros':<8} {'Backend':<8} {'Qubits':<12} {'Depth':<10} {'T-count':<15}")
-    print("=" * 85)
+    print("=" * 100)
+    print(f"{'Sparsity':<10} {'Zeros':<8} {'Backend':<8} {'Qubits':<12} {'Depth':<12} {'T-count':<15} {'T-depth':<12}")
+    print("=" * 100)
     for r in results:
         if r['qubits'] > 0:
-            print(f"{r['sparsity']:<10.0%} {r['zeros']:<8} {r['backend']:<8} {r['qubits']:<12,} {r['depth']:<10,} {r['t_count']:<15,}")
+            print(f"{r['sparsity']:<10.0%} {r['zeros']:<8} {r['backend']:<8} {r['qubits']:<12,} {r['depth']:<12,} {r['t_count']:<15,} {r['t_depth']:<12,}")
         else:
-            print(f"{r['sparsity']:<10.0%} {r['zeros']:<8} {r['backend']:<8} {'FAILED':<12} {'-':<10} {'-':<15}")
-    print("=" * 85)
+            print(f"{r['sparsity']:<10.0%} {r['zeros']:<8} {r['backend']:<8} {'FAILED':<12}")
+    print("=" * 100)
 
 
 if __name__ == '__main__':
