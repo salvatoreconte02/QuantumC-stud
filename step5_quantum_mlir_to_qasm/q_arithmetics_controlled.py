@@ -355,7 +355,7 @@ def addi_in_place_controlled(qc, qreg, b, control):
     if ARITHMETIC_MODE == "ripple":
         return _ripple_addi_in_place_controlled(qc, qreg, b, control)
 
-    # QFT version (as before)
+    # QFT version 
     n = len(qreg)
     b_bin = int_to_twos_complement(b)
     b_int = int(''.join(str(x) for x in b_bin[::-1]), 2)

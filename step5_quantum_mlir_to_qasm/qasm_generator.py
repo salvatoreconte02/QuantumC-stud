@@ -108,7 +108,7 @@ def generate_circuit(
         return reg_map[val]
 
     # ------------------------------------------------------------
-    # FIX CRITICO: iterazione corretta delle funzioni nel modulo xdsl
+    # Iterazione delle funzioni nel modulo xdsl
     # ------------------------------------------------------------
     top = module.body.blocks[0]
 
