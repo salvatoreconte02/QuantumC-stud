@@ -834,7 +834,7 @@ def compile_c_file(
     tu = parse_ast(ast_json)
 
     if pretty:
-        print("=== Pretty Printed C Code ===")
+        print("=== C Code ===")
         print(pretty_print_translation_unit(tu))
         print("================================")
 
@@ -869,9 +869,9 @@ def compile_c_file(
 
     if enable_vecmat_path:
         if has_vecmat_ops:
-            print(">>> Rilevate macro-op vettoriali/matriciali: VecMat → quantum.")
+            print("Rilevate macro-op vettoriali/matriciali: VecMat → quantum.")
         else:
-            print(">>> Nessuna macro-op, ma presenti inizializzazioni costanti: VecMat → quantum (solo init).")
+            print(" Nessuna macro-op, ma presenti inizializzazioni costanti: VecMat → quantum (solo init).")
 
         print("VecMat const_arrays:", getattr(vecmat_module, "const_arrays", None))
         print("VecMat const_shapes:", getattr(vecmat_module, "const_shapes", None))
@@ -886,7 +886,7 @@ def compile_c_file(
             return_hints=return_hints,
         )
     else:
-        print(">>> Nessuna macro-op vettoriale/matriciale e nessuna inizializzazione costante: uso solo il percorso scalare.")
+        print("Nessuna macro-op vettoriale/matriciale e nessuna inizializzazione costante: uso solo il percorso scalare.")
         quantum_module = scalar_quantum_module
 
     _ensure_scalar_returns(quantum_module)
