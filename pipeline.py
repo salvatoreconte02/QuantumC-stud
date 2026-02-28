@@ -97,16 +97,16 @@ def save_module(module: ModuleOp, path: str) -> None:
 
 def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> TranslationUnit:
     """
-    Mantiene l'ibrido evitando però che il percorso scalare compili anche i loop
-    già riconosciuti come macro-op (vec_add / vec_dot / matmul).
+    Restituisce una copia della Translation Unit dove i loop già riconosciuti come macro-op
+    (vec_add / vec_dot / matmul) vengono rimossi dal body delle funzioni.
 
-    Fix: alcuni AST possono contenere liste annidate dentro CompoundStmt.stmts
-    (es. [[VarDecl(...)], ForStmt(...), AssignStmt(...)]) e questo impedisce i match.
-    Qui si normalizza (flatten) prima di applicare i matcher.
+    Serve per evitare che il percorso "scalare" ricompili anche i loop che
+    abbiamo già abbassato come operazioni VecMat.
     """
     tu2 = deepcopy(tu)
 
     def _flatten_stmts(stmts):
+        """Appiattisce liste annidate di statement (alcuni AST le producono)."""
         out = []
         for s in stmts:
             if isinstance(s, list):
@@ -127,6 +127,7 @@ def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> T
         new_stmts = []
         for s in decl.body.stmts:
             if isinstance(s, ForStmt):
+                # Se il loop matcha una macro-op, lo scartiamo.
                 if _match_matmul_for(s, elem_bits) is not None:
                     continue
                 if _match_matmul_for_direct(s, elem_bits) is not None:
@@ -143,7 +144,7 @@ def filter_out_recognized_vecmat_loops(tu: TranslationUnit, elem_bits: int) -> T
 
 def filter_out_vecmat_decls(tu: TranslationUnit) -> TranslationUnit:
     """
-    Rimuove dal TU destinato al percorso scalare le dichiarazioni non-scalari
+    Rimuove dal Translation Unit destinato al percorso scalare le dichiarazioni non-scalari
     (vettori/matrici) che il generatore scalare non gestisce correttamente.
 
     Regole:
@@ -221,9 +222,8 @@ def _ensure_scalar_returns(quantum_module: ModuleOp) -> None:
         body.add_op(ReturnOp(ret_val))
 
 
-# -------------------------
-# Return hint extraction
-# -------------------------
+
+####### Return hint extraction ##########
 
 @dataclass(frozen=True)
 class ReturnHint:
@@ -461,9 +461,7 @@ def _extract_return_hints(tu: TranslationUnit, vecmat_module) -> dict[str, Retur
     return hints
 
 
-# -------------------------
-# Merge
-# -------------------------
+#### Merge #####
 
 def _merge_scalar_and_vec_quantum(
     scalar_quantum_module: ModuleOp,
@@ -471,14 +469,12 @@ def _merge_scalar_and_vec_quantum(
     return_hints: dict[str, ReturnHint | HybridReturnHint] | None = None,
 ) -> ModuleOp:
     """
-    Merge + collegamento risultato vettoriale/matriciale al return (solo se il return scalare è placeholder).
+    Unisce il modulo quantum "scalare" con quello "vec/mat" (macro-op).
 
-    Logica corretta (generale):
-      - se vec_quantum_module espone result_map (side-table) allora:
-          * return c[i]    -> lookup key (name, i)
-          * return C[r][c] -> lookup key (name, r, c)
-        e si collega ESATTAMENTE quello SSAValue.
-      - fallback solo se result_map non è disponibile o non contiene la chiave.
+    Copia (clone) le operazioni del vec module dentro la funzione scalare corrispondente,
+    rimappando gli SSAValue. Se il return della funzione scalare è un placeholder (0),
+    lo sostituisce con il valore corretto preso da result_map o da euristiche.
+    Supporta anche un return ibrido (scalare op array) se specificato in return_hints.
     """
     return_hints = return_hints or {}
 
@@ -489,6 +485,8 @@ def _merge_scalar_and_vec_quantum(
         op.sym_name.data: op for op in scalar_top.ops if isinstance(op, FuncOp)
     }
 
+    # result_map collega (nome, indici) allo SSAValue finale generato nel lowering vec/mat.
+    # Lo usiamo per scegliere in modo deterministico cosa ritornare (es. C[i][j]), senza euristiche fragili.
     vec_result_map = getattr(vec_quantum_module, "result_map", None)
 
     for vec_func in vec_top.ops:
@@ -529,6 +527,9 @@ def _merge_scalar_and_vec_quantum(
             else:
                 vec_others.append(op)
 
+        # Mappa SSA che associa ogni risultato del vec module
+        # al corrispondente SSAValue clonato nella funzione scalare.
+        # Serve per sostituire correttamente gli operandi dopo il clone.
         ssa_map: dict[SSAValue, SSAValue] = {}
 
         def insert_before(anchor: Operation | None, op_to_insert: Operation) -> None:
@@ -556,6 +557,8 @@ def _merge_scalar_and_vec_quantum(
                 ssa_map[old_res] = new_res
                 produced_results.append(new_res)
 
+        # Se il return scalare è "0" , ovvero un placeholder, lo rimpiazziamo col risultato vec/mat.
+        # Se non è placeholder, lo lasciamo (a meno di un return ibrido esplicito).
         if return_anchor is not None and return_anchor.operands:
             ret_val = return_anchor.operands[0]
             is_placeholder_zero = False
@@ -568,8 +571,8 @@ def _merge_scalar_and_vec_quantum(
 
             hint = return_hints.get(fname)
 
-            # NUOVO: gestione return ibrido (scalar + array)
-            # es. return z + C[1][1]
+            # Caso return ibrido: combiniamo il valore scalare già calcolato con un elemento di array
+            # preso da result_map (es. z + C[1][1]), secondo la hint.
             if isinstance(hint, HybridReturnHint) and not is_placeholder_zero:
                 # Il return scalare ha già il valore di z (scalare)
                 scalar_val = ret_val
@@ -627,7 +630,7 @@ def _merge_scalar_and_vec_quantum(
                                 chosen = remap(vec_result_map[key])
                     except Exception:
                         chosen = None
-
+                # Fallback: se non abbiamo hint/result_map, prova a scegliere un "sink" (valore non usato dopo).
                 if chosen is None and produced_results:
                     sinks: list[SSAValue] = []
                     for r in produced_results:
@@ -653,12 +656,11 @@ def _merge_scalar_and_vec_quantum(
     return scalar_quantum_module
 
 
-# -------------------------
-# Metrics + scoring
-# -------------------------
+######### Metrics + scoring ########## da togliere gli score???
 
 @dataclass(frozen=True)
 class CircuitMetrics:
+    """Metriche di un circuito dopo transpile su base Clifford+T"""
     mode: str
     num_qubits: int
     depth: int
@@ -681,27 +683,22 @@ class CircuitMetrics:
 
 def _compute_metrics_and_score(qc) -> CircuitMetrics:
     """
-    Calcola metriche dal circuito dopo transpile a Clifford+T basis.
+    Transpila il circuito su basis Clifford+T (+Rz) e calcola metriche/score.
 
-    FLUSSO UNIFICATO (come richiesto dal tutor):
-      1. Transpile a Clifford+T: {H, S, Sdg, T, Tdg, CX, Rz}
-      2. Calcola TUTTE le metriche dal circuito transpilato
-      3. T-count = T + Tdg + Rz_t_angle + 150*Rz_arbitrari
-
-    Questo garantisce che QFT e Ripple siano confrontati sullo stesso gate set.
-
-    Riferimento T-count: Ross-Selinger 2014, ~150 T per rotazione arbitraria
-    con precisione epsilon=10^-15.
+    Stima T-count:
+      - T/Tdg contano 1 ciascuno
+      - Rz multipli di pi/4 contano come 1 T
+      - Rz non-Clifford vengono approssimati con un costo fisso (default 150 T)
     """
-    # ==========================================================================
-    # STEP 1: Transpile a Clifford+T basis
-    # ==========================================================================
+    
+    ###### Transpile a base Clifford+T  #########
+    
     CLIFFORD_T_BASIS = ['h', 's', 'sdg', 't', 'tdg', 'cx', 'rz']
     transpiled = transpile(qc, basis_gates=CLIFFORD_T_BASIS, optimization_level=3)
 
-    # ==========================================================================
-    # STEP 2: Calcola metriche dal circuito transpilato
-    # ==========================================================================
+    
+    ###### Calcola metriche dal circuito transpilato #######
+   
     num_qubits = transpiled.num_qubits
     depth = int(transpiled.depth())
     size = int(transpiled.size())
@@ -715,9 +712,9 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
     count_p = int(counts.get("p", 0))
     count_rz = int(counts.get("rz", 0))
 
-    # ==========================================================================
-    # STEP 3: Calcola T-count analizzando i gate Rz
-    # ==========================================================================
+    
+    ###### Calcola T-count analizzando i gate Rz ########
+    
     T_GATES_PER_ARBITRARY_ROTATION = 150
 
     def _is_clifford_angle(angle: float, tol: float = 1e-10) -> bool:
@@ -732,10 +729,10 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
         remainder = normalized % (np.pi / 4)
         return remainder < tol or (np.pi / 4 - remainder) < tol
 
-    # Conta T-gates espliciti
+    #Conta T-gates espliciti 
     t_count_exact = count_t + count_tdg
 
-    # Analizza i gate Rz
+    # Analizza i gate Rz 
     rz_clifford = 0      # multipli di pi/2 → 0 T
     rz_t_angle = 0       # multipli di pi/4 → 1 T
     rz_arbitrary = 0     # altri angoli → 150 T
@@ -755,8 +752,8 @@ def _compute_metrics_and_score(qc) -> CircuitMetrics:
     t_count = t_count_exact + t_count_approx
     arbitrary_rotations = rz_arbitrary
 
-    # T-depth: conta i layer che contengono T-gates o Rz non-Clifford
-    # (semplificato: usa il DAG per contare)
+    # T-depth: profondità effettiva delle T-gates, calcolata sul DAG del circuito.
+    # Include T/Tdg e Rz non-Clifford.
     t_depth = compute_t_depth(transpiled)
 
     # Score basato principalmente su T-count
