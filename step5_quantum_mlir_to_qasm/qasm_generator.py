@@ -120,7 +120,7 @@ def generate_circuit(
         block = top_op.body.blocks[0]
 
         # --------------------------------------------------------
-        # (Robustezza) Prima passata: materializza TUTTI gli init
+        # Prima passata: materializza TUTTI gli init
         # così reg_map è popolata prima di qualsiasi uso.
         # --------------------------------------------------------
         for op in block.ops:
@@ -340,14 +340,12 @@ import numpy as np
 # =============================================================================
 # Clifford+T Decomposition Constants
 # =============================================================================
-# Numero di T-gates per approssimare una rotazione arbitraria (Solovay-Kitaev/gridsynth)
+# Numero di T-gates per approssimare una rotazione arbitraria (Solovay-Kitaev)
 # con precisione epsilon ~= 10^-15. Formula: T-count ≈ 3 * log2(1/epsilon)
 # Per epsilon = 10^-15: log2(10^15) ≈ 50, quindi 3*50 = 150
-# Riferimento: Ross-Selinger 2014, "Optimal ancilla-free Clifford+T approximation"
 T_GATES_PER_ARBITRARY_ROTATION = 150
 
 # T-gates per decomporre un Toffoli (CCX) - decomposizione esatta standard
-# Riferimento: Nielsen & Chuang, decomposizione con 7 T-gates
 T_GATES_PER_TOFFOLI = 7
 
 # Angoli che sono multipli esatti di pi/4 (nativi in Clifford+T)
@@ -390,7 +388,7 @@ def _t_count_for_angle(angle: float, tolerance: float = 1e-10) -> int:
 
     - Se angle è multiplo di pi/2 → 0 T (è Clifford: S, Z, I)
     - Se angle è multiplo di pi/4 → 1 T (è T o Tdg)
-    - Altrimenti → T_GATES_PER_ARBITRARY_ROTATION (approssimazione)
+    - Altrimenti → T_GATES_PER_ARBITRARY_ROTATION 
     """
     if _is_clifford_angle(angle, tolerance):
         return 0
@@ -540,7 +538,7 @@ def export_qasm_clifford_t(circuit: QuantumCircuit, path: str) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     # Prima trasportiamo verso un gate set che includa T
-    # Nota: Qiskit non fa automaticamente Solovay-Kitaev, quindi usiamo
+    # Qiskit non fa automaticamente Solovay-Kitaev, quindi usiamo
     # un gate set intermedio e calcoliamo il T-count separatamente
     clifford_t_basis = ["h", "s", "sdg", "t", "tdg", "x", "y", "z", "cx", "rz", "measure"]
     transpiled = transpile(circuit, basis_gates=clifford_t_basis, optimization_level=3)
