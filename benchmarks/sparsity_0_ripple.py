@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run only the 0% sparsity ripple-carry test and append to CSV."""
+"""Run the 0% sparsity ripple-carry test and append to CSV."""
 import os, sys, csv, random, subprocess, tempfile, time
 from pathlib import Path
 

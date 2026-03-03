@@ -25,9 +25,9 @@ import time
 from pathlib import Path
 
 
-# =============================================================================
+
 # Configuration
-# =============================================================================
+
 SIZE = 16           # Matrix dimension (16x16 = 256 elements)
 BITS = 8            # Bit width for integers
 BACKENDS = ['qft', 'ripple']

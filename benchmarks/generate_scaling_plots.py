@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate 9 scaling plots for the paper:
+Generate 9 scaling plots:
 - 3 operations (vec_add, vec_dot, matmul)
 - 3 metrics (Qubits, Depth, T-count)
 - 2 curves per plot (QFT vs Ripple)
